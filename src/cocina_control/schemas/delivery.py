@@ -1,4 +1,8 @@
-"""Pydantic schemas for the deliveries domain (pre-load phase, issue #10)."""
+"""Pydantic schemas for the deliveries domain.
+
+Pre-load schemas (issue #10): DeliveryCreate, DeliveryUpdate.
+Verification schemas (issue #11): DeliveryItemConfirm, DeliveryItemCorrect.
+"""
 
 import uuid
 from datetime import datetime
@@ -92,6 +96,43 @@ class DeliveryUpdate(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Verification request schemas (issue #11)
+# ---------------------------------------------------------------------------
+
+
+class DeliveryItemConfirm(BaseModel):
+    """Body for POST /deliveries/{id}/items/{item_id}/confirm.
+
+    received_qty == 0 is valid: it means the product was announced but did
+    not arrive.  Negative values are rejected by the ge=0 constraint.
+    """
+
+    received_qty: Annotated[Decimal, Field(ge=0)]
+
+
+class DeliveryItemCorrect(BaseModel):
+    """Body for POST /deliveries/{id}/items/{item_id}/correct.
+
+    reason is optional.  When provided it is persisted in the new correction
+    row so the forensic CSV shows why the quantity was changed.  If omitted,
+    the column is stored as NULL — no information is lost other than the
+    operator's explanation.
+
+    Design decision (issue #11): reason is persisted (option b) rather than
+    ignored (option a) because it adds forensic value with no schema cost
+    beyond a single nullable TEXT column (migration 0005).
+    """
+
+    received_qty: Annotated[Decimal, Field(ge=0)]
+    reason: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Response schemas
+# ---------------------------------------------------------------------------
+
+
 class DeliveryItemResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -100,6 +141,7 @@ class DeliveryItemResponse(BaseModel):
     product_name: str
     announced_qty: Decimal
     received_qty: Decimal | None
+    corrects_id: uuid.UUID | None = None
 
 
 class DeliveryListItem(BaseModel):
@@ -132,3 +174,22 @@ class DeliveryDetailResponse(BaseModel):
     validated_at: datetime | None
     validated_by: uuid.UUID | None
     items: list[DeliveryItemResponse]
+
+
+class DeliveryItemCorrectionResponse(BaseModel):
+    """Response for POST /deliveries/{id}/items/{item_id}/correct.
+
+    Returns the new correction item.  corrects_id makes the append-only chain
+    explicit: the caller does not need to infer it.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    delivery_id: uuid.UUID
+    product_id: uuid.UUID
+    announced_qty: Decimal
+    received_qty: Decimal
+    corrects_id: uuid.UUID
+    reason: str | None
+    created_at: datetime

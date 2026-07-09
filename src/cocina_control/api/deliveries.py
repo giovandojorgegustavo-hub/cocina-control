@@ -1,13 +1,18 @@
-"""Delivery pre-load endpoints (issue #10).
+"""Delivery endpoints (issue #10 pre-load + issue #11 verification).
 
-Routes
-------
-POST   /api/v1/deliveries           — owner pre-loads a delivery
-GET    /api/v1/deliveries           — inbox list (operator + owner)
-GET    /api/v1/deliveries/{id}      — delivery detail (operator + owner)
-PATCH  /api/v1/deliveries/{id}      — edit draft delivery (owner only, status == no_leida)
+Pre-load routes (issue #10)
+----------------------------
+POST   /api/v1/deliveries          — owner pre-loads a delivery
+GET    /api/v1/deliveries          — inbox list (operator + owner)
+GET    /api/v1/deliveries/{id}     — delivery detail (operator + owner)
+PATCH  /api/v1/deliveries/{id}     — edit draft delivery (owner only, no_leida)
 
-Verification endpoints (open/confirm/validate/correct) are issue #11 — not here.
+Verification routes (issue #11)
+---------------------------------
+POST   /api/v1/deliveries/{id}/open                    — operator marks en_verificacion
+POST   /api/v1/deliveries/{id}/items/{item_id}/confirm — operator sets received_qty
+POST   /api/v1/deliveries/{id}/validate                — operator finalises delivery
+POST   /api/v1/deliveries/{id}/items/{item_id}/correct — operator (same day) or owner
 
 Append-only invariant for delivery_items
 -----------------------------------------
@@ -17,6 +22,18 @@ corrects_id.  While the delivery is still no_leida (draft, never seen by
 anyone), the owner's edits are NOT corrections — they are plain draft edits.
 The PATCH handler therefore replaces items with a physical DELETE + INSERT
 (no corrects_id trail).  This is intentional and documented in diseno.md §2.a.
+
+Confirm vs. Correct — design decision
+--------------------------------------
+During en_verificacion the operator fills in received_qty for each item.
+This is a COMPLETION of information the owner could not know at pre-load
+time — NOT a correction of a previous value.  Therefore confirm() does an
+UPDATE on the existing item row rather than inserting a new one.
+
+After the delivery is validada, any change to received_qty is a true
+correction (the value was already recorded and reviewed).  Therefore
+correct() inserts a NEW row with corrects_id pointing to the previous row,
+preserving the append-only audit trail.
 
 Concurrency design for PATCH — last-write-wins on no_leida
 -----------------------------------------------------------
@@ -28,11 +45,12 @@ This is an accepted design decision because:
   3. Adding ETag or optimistic locking would be over-engineering at v0.2.
 
 The PATCH handler does use SELECT FOR UPDATE to guard against a CONCURRENT
-operator /open (issue #11) sneaking in between the status check and the
-update.  That race is handled.  Owner-vs-owner PATCH concurrency is not
-guarded — last write wins.
+operator /open sneaking in between the status check and the update.  That
+race is handled.  Owner-vs-owner PATCH concurrency is not guarded — last
+write wins.
 """
 
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated
@@ -49,10 +67,16 @@ from cocina_control.models.user import User
 from cocina_control.schemas.delivery import (
     DeliveryCreate,
     DeliveryDetailResponse,
+    DeliveryItemConfirm,
+    DeliveryItemCorrect,
+    DeliveryItemCorrectionResponse,
     DeliveryItemResponse,
     DeliveryListItem,
     DeliveryUpdate,
 )
+from cocina_control.security.time_windows import is_same_calendar_day_argentina
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/deliveries", tags=["deliveries"])
 
@@ -69,6 +93,53 @@ def _get_delivery_or_404(session: Session, delivery_id: uuid.UUID) -> Delivery:
     if delivery is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Delivery not found")
     return delivery
+
+
+def _get_delivery_for_update_or_404(session: Session, delivery_id: uuid.UUID) -> Delivery:
+    """SELECT ... FOR UPDATE — use inside an open transaction."""
+    delivery = session.scalars(
+        select(Delivery).where(Delivery.id == delivery_id).with_for_update()
+    ).first()
+    if delivery is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Delivery not found")
+    return delivery
+
+
+def _get_leaf_item_or_404(
+    session: Session, delivery_id: uuid.UUID, item_id: uuid.UUID
+) -> DeliveryItem:
+    """Return the item if it belongs to the delivery and is a leaf (not yet corrected).
+
+    A "leaf" item is one that no other item references via corrects_id.
+    Corrected items cannot be confirmed or corrected again — the caller must
+    target the latest leaf in the chain.
+
+    Returns 404 (not 409) for both missing items and non-leaf items: this
+    avoids leaking the existence of superseded rows to the caller, which is
+    consistent with a resource-oriented API where corrected items are no longer
+    addressable as targets.
+    """
+    item = session.scalars(
+        select(DeliveryItem).where(
+            DeliveryItem.id == item_id,
+            DeliveryItem.delivery_id == delivery_id,
+        )
+    ).first()
+    if item is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Item not found in this delivery",
+        )
+    # Check whether another item corrects this one (i.e. it is NOT a leaf).
+    corrector = session.scalars(
+        select(DeliveryItem).where(DeliveryItem.corrects_id == item_id).limit(1)
+    ).first()
+    if corrector is not None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Item not found in this delivery",
+        )
+    return item
 
 
 def _validate_products(
@@ -397,3 +468,335 @@ def update_delivery(
 
     session.flush()
     return _delivery_to_detail(session, delivery)
+
+
+# ---------------------------------------------------------------------------
+# POST /deliveries/{delivery_id}/open   (issue #11)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{delivery_id}/open",
+    response_model=DeliveryDetailResponse,
+    summary="Open delivery for verification (operator only)",
+)
+def open_delivery(
+    delivery_id: uuid.UUID,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_role("operator")),
+) -> DeliveryDetailResponse:
+    """Transition a delivery from no_leida → en_verificacion.
+
+    SELECT FOR UPDATE prevents a concurrent PATCH (owner) or another /open
+    from racing through the status check.
+
+    Idempotency: if the delivery is already en_verificacion this returns 409
+    rather than silently succeeding, because the caller must know whether it
+    was THIS call that opened the delivery (audit trail in updated_by).
+
+    Status mapping for 409 messages:
+    - en_verificacion → "Delivery is already open"
+    - validada        → "Delivery is already validated"
+    """
+    delivery = _get_delivery_for_update_or_404(session, delivery_id)
+
+    if delivery.status == "en_verificacion":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Delivery is already open",
+        )
+    if delivery.status == "validada":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Delivery is already validated",
+        )
+
+    delivery.status = "en_verificacion"
+    delivery.updated_at = datetime.now(UTC)
+    delivery.updated_by = current_user.id
+
+    session.flush()
+    return _delivery_to_detail(session, delivery)
+
+
+# ---------------------------------------------------------------------------
+# POST /deliveries/{delivery_id}/items/{item_id}/confirm   (issue #11)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{delivery_id}/items/{item_id}/confirm",
+    response_model=DeliveryItemResponse,
+    summary="Confirm item quantity received (operator only)",
+)
+def confirm_item(
+    delivery_id: uuid.UUID,
+    item_id: uuid.UUID,
+    body: DeliveryItemConfirm,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_role("operator")),
+) -> DeliveryItemResponse:
+    """Set received_qty on a leaf item while the delivery is en_verificacion.
+
+    Design decision — UPDATE not INSERT
+    ------------------------------------
+    During en_verificacion the operator fills in information the owner could
+    not know at pre-load time (what actually arrived).  This is a COMPLETION,
+    not a correction of a previously recorded value.  Therefore confirm()
+    mutates the existing item row directly rather than inserting a new row.
+
+    The append-only model kicks in only after validate(): any post-validation
+    change goes through /correct, which inserts a new row with corrects_id.
+
+    Idempotency
+    -----------
+    If the same received_qty is sent twice the call is idempotent: returns 200
+    with the current item without writing to the DB.
+
+    If a DIFFERENT received_qty is sent after the item already has one, the
+    call returns 409.  The operator must use /correct after the delivery is
+    validated to change a previously confirmed quantity.
+
+    Status guards
+    -------------
+    - no_leida      → 409 "open the delivery first"
+    - validada      → 409 "delivery already validated; use correct endpoint"
+    """
+    delivery = _get_delivery_or_404(session, delivery_id)
+
+    if delivery.status == "no_leida":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Open the delivery first",
+        )
+    if delivery.status == "validada":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Delivery already validated; use correct endpoint",
+        )
+
+    item = _get_leaf_item_or_404(session, delivery_id, item_id)
+
+    # Idempotency: same value → return current state without writing.
+    if item.received_qty is not None:
+        if item.received_qty == body.received_qty:
+            product = session.get(Product, item.product_id)
+            return DeliveryItemResponse(
+                id=item.id,
+                product_id=item.product_id,
+                product_name=product.name if product else "",
+                announced_qty=item.announced_qty,
+                received_qty=item.received_qty,
+                corrects_id=item.corrects_id,
+            )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Item already confirmed with different qty;"
+                " use correct endpoint after validation"
+            ),
+        )
+
+    item.received_qty = body.received_qty
+    session.flush()
+
+    product = session.get(Product, item.product_id)
+    return DeliveryItemResponse(
+        id=item.id,
+        product_id=item.product_id,
+        product_name=product.name if product else "",
+        announced_qty=item.announced_qty,
+        received_qty=item.received_qty,
+        corrects_id=item.corrects_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /deliveries/{delivery_id}/validate   (issue #11)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{delivery_id}/validate",
+    response_model=DeliveryDetailResponse,
+    summary="Validate delivery (operator only, all items must be confirmed)",
+)
+def validate_delivery(
+    delivery_id: uuid.UUID,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_role("operator")),
+) -> DeliveryDetailResponse:
+    """Finalise a delivery, transitioning it from en_verificacion → validada.
+
+    Pre-conditions:
+    - All leaf items must have received_qty IS NOT NULL.
+    - Delivery must be in en_verificacion.
+
+    Concurrency
+    -----------
+    SELECT FOR UPDATE on the delivery row ensures that if two operators attempt
+    to validate simultaneously, the second will block until the first commits.
+    The second then reads status == validada and returns 409.
+
+    Stock impact
+    ------------
+    Once status == validada, the delivery_items rows (leaf items with
+    received_qty IS NOT NULL) are automatically included in the on-demand stock
+    computation that the dashboard (issue #14) runs.  No separate stock table
+    is updated here — the computation reads directly from this table.
+    """
+    delivery = _get_delivery_for_update_or_404(session, delivery_id)
+
+    if delivery.status != "en_verificacion":
+        if delivery.status == "validada":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Delivery is already validated",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Delivery must be open (en_verificacion) to validate",
+        )
+
+    # Fetch leaf items.
+    all_items = session.scalars(
+        select(DeliveryItem).where(DeliveryItem.delivery_id == delivery_id)
+    ).all()
+    corrected_ids = {i.corrects_id for i in all_items if i.corrects_id is not None}
+    leaf_items = [i for i in all_items if i.id not in corrected_ids]
+
+    pending = [str(i.id) for i in leaf_items if i.received_qty is None]
+    if pending:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "message": "All items must be confirmed before validation",
+                "pending_item_ids": pending,
+            },
+        )
+
+    now = datetime.now(UTC)
+    delivery.status = "validada"
+    delivery.validated_at = now
+    delivery.validated_by = current_user.id
+    delivery.updated_at = now
+    delivery.updated_by = current_user.id
+
+    session.flush()
+    return _delivery_to_detail(session, delivery)
+
+
+# ---------------------------------------------------------------------------
+# POST /deliveries/{delivery_id}/items/{item_id}/correct   (issue #11)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{delivery_id}/items/{item_id}/correct",
+    response_model=DeliveryItemCorrectionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Correct a validated item (operator same-day, owner anytime)",
+)
+def correct_item(
+    delivery_id: uuid.UUID,
+    item_id: uuid.UUID,
+    body: DeliveryItemCorrect,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> DeliveryItemCorrectionResponse:
+    """Create a new correction row for a leaf item of a validated delivery.
+
+    Append-only: the original item row is NEVER modified.  A new DeliveryItem
+    row is inserted with corrects_id pointing to the item being corrected.
+
+    Permission and time-window rules
+    ----------------------------------
+    - Owner: can correct at any time, no window restriction.
+    - Operator: can only correct items whose creation date (in UTC-3 calendar)
+      is the same calendar day as now (UTC-3).  If the item was confirmed on a
+      previous calendar day, the operator receives 403.
+
+    The time-window is based on the item's created_at (when the item row was
+    first inserted at pre-load time), which is effectively the same as the
+    date of the delivery session for practical purposes.  Using the delivery's
+    validated_at would also be valid, but item.created_at is more granular.
+
+    Why item.created_at and not validated_at
+    -----------------------------------------
+    The item row was created when the owner pre-loaded the delivery.  The
+    operator confirmed it (set received_qty) on the same day.  Using
+    item.created_at as the window anchor means the operator's window is tied
+    to the day the delivery was created — which matches the business intent:
+    "same session" ≈ "same calendar day".  If a delivery is pre-loaded at
+    23:55 and the operator confirms at 00:10 the next day, the operator
+    window would be closed.  This edge case is rare and the owner can always
+    correct.
+
+    reason (optional)
+    ------------------
+    When provided, reason is persisted in the new correction row.  This makes
+    the forensic CSV self-explanatory — the owner sees what was corrected and
+    why, without needing a side channel.
+    """
+    delivery = _get_delivery_or_404(session, delivery_id)
+
+    if delivery.status != "validada":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Delivery not validated yet; confirm and validate first",
+        )
+
+    item = _get_leaf_item_or_404(session, delivery_id, item_id)
+
+    now = datetime.now(UTC)
+
+    # Enforce time-window for operators.
+    if current_user.role == "operator":
+        if not is_same_calendar_day_argentina(item.created_at, now):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Correction window closed for operator",
+            )
+    elif current_user.role != "owner":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    new_item = DeliveryItem(
+        id=uuid.uuid4(),
+        delivery_id=delivery_id,
+        product_id=item.product_id,
+        announced_qty=item.announced_qty,
+        received_qty=body.received_qty,
+        corrects_id=item_id,
+        reason=body.reason,
+        created_by=current_user.id,
+    )
+    session.add(new_item)
+
+    delivery.updated_at = now
+    delivery.updated_by = current_user.id
+
+    session.flush()
+
+    if body.reason is not None:
+        log.info(
+            "Delivery item corrected with reason",
+            extra={
+                "delivery_id": str(delivery_id),
+                "original_item_id": str(item_id),
+                "new_item_id": str(new_item.id),
+                "corrected_by": str(current_user.id),
+                "role": current_user.role,
+                "reason": body.reason,
+            },
+        )
+
+    return DeliveryItemCorrectionResponse(
+        id=new_item.id,
+        delivery_id=new_item.delivery_id,
+        product_id=new_item.product_id,
+        announced_qty=new_item.announced_qty,
+        received_qty=new_item.received_qty,
+        corrects_id=new_item.corrects_id,
+        reason=new_item.reason,
+        created_at=new_item.created_at,
+    )
