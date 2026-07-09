@@ -3,6 +3,9 @@ import { Login } from './pages/Login'
 import { Home } from './pages/Home'
 import { Bandeja } from './pages/Bandeja'
 import { Verificacion } from './pages/Verificacion'
+import { NuevoPedido } from './pages/NuevoPedido'
+import { BandejaPedidos } from './pages/BandejaPedidos'
+import { CompletarPedido } from './pages/CompletarPedido'
 import { RequireAuth, RequireRole } from './lib/guards'
 
 function OwnerPlaceholder() {
@@ -62,14 +65,31 @@ export const router = createBrowserRouter([
     ),
   },
   {
-    // Placeholder for Frontend #5 — new order screen
     path: '/pedidos/nuevo',
     element: (
       <RequireAuth>
         <RequireRole role="operator">
-          <div className="min-h-screen flex items-center justify-center bg-gray-50">
-            <p className="text-gray-500 text-sm">Nuevo pedido — viene en Frontend #5</p>
-          </div>
+          <NuevoPedido />
+        </RequireRole>
+      </RequireAuth>
+    ),
+  },
+  {
+    // Bandeja de pedidos — accessible to operator and owner
+    // The role filter is enforced by the backend; RequireAuth is enough here.
+    path: '/pedidos',
+    element: (
+      <RequireAuth>
+        <BandejaPedidos />
+      </RequireAuth>
+    ),
+  },
+  {
+    path: '/pedidos/:id/completar',
+    element: (
+      <RequireAuth>
+        <RequireRole role="operator">
+          <CompletarPedido />
         </RequireRole>
       </RequireAuth>
     ),
