@@ -14,7 +14,19 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      use: {
+        ...devices['Desktop Chrome'],
+        // Allow camera access for tests that need getUserMedia.
+        // --use-fake-ui-for-media-stream: auto-grants camera permission without
+        //   a browser dialog, and provides a fake black video track when no real
+        //   camera is available in the CI environment.
+        launchOptions: {
+          args: [
+            '--use-fake-ui-for-media-stream',
+            '--use-fake-device-for-media-stream',
+          ],
+        },
+      },
     },
   ],
   webServer: {
