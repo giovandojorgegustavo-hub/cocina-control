@@ -40,6 +40,12 @@ class Delivery(Base, TimestampMixin):
     validated_by: Mapped[uuid.UUID | None] = mapped_column(
         sa.ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
     )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        sa.ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
 
 
 class DeliveryItem(Base, AppendOnlyMixin):

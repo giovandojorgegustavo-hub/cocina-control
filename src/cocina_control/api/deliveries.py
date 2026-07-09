@@ -17,9 +17,24 @@ corrects_id.  While the delivery is still no_leida (draft, never seen by
 anyone), the owner's edits are NOT corrections — they are plain draft edits.
 The PATCH handler therefore replaces items with a physical DELETE + INSERT
 (no corrects_id trail).  This is intentional and documented in diseno.md §2.a.
+
+Concurrency design for PATCH — last-write-wins on no_leida
+-----------------------------------------------------------
+Two concurrent PATCH requests from the same owner on a no_leida delivery do
+NOT conflict with each other: the second commit simply wins (last-write-wins).
+This is an accepted design decision because:
+  1. Only one owner exists per deployment.
+  2. The delivery is a draft — no operator has opened it.
+  3. Adding ETag or optimistic locking would be over-engineering at v0.2.
+
+The PATCH handler does use SELECT FOR UPDATE to guard against a CONCURRENT
+operator /open (issue #11) sneaking in between the status check and the
+update.  That race is handled.  Owner-vs-owner PATCH concurrency is not
+guarded — last write wins.
 """
 
 import uuid
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -41,8 +56,7 @@ from cocina_control.schemas.delivery import (
 
 router = APIRouter(prefix="/deliveries", tags=["deliveries"])
 
-_EDITABLE_STATUS = "no_leida"
-_LOCKED_STATUSES = {"en_verificacion", "validada"}
+_EDITABLE_STATUSES = {"no_leida"}
 
 
 # ---------------------------------------------------------------------------
@@ -115,16 +129,24 @@ def _build_item_responses(
         for p in session.scalars(select(Product).where(Product.id.in_(product_ids))).all()
     }
 
-    return [
-        DeliveryItemResponse(
-            id=item.id,
-            product_id=item.product_id,
-            product_name=products[item.product_id].name,
-            announced_qty=item.announced_qty,
-            received_qty=item.received_qty,  # always None in this PR
+    responses = []
+    for item in leaf_items:
+        product = products.get(item.product_id)
+        if product is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Data integrity error: item references missing product",
+            )
+        responses.append(
+            DeliveryItemResponse(
+                id=item.id,
+                product_id=item.product_id,
+                product_name=product.name,
+                announced_qty=item.announced_qty,
+                received_qty=item.received_qty,  # always None in this PR
+            )
         )
-        for item in leaf_items
-    ]
+    return responses
 
 
 def _delivery_to_detail(session: Session, delivery: Delivery) -> DeliveryDetailResponse:
@@ -134,7 +156,6 @@ def _delivery_to_detail(session: Session, delivery: Delivery) -> DeliveryDetailR
         supplier_name=delivery.supplier_name,
         status=delivery.status,
         created_at=delivery.created_at,
-        created_by=delivery.created_by,
         validated_at=delivery.validated_at,
         validated_by=delivery.validated_by,
         items=items,
@@ -297,8 +318,9 @@ def update_delivery(
 ) -> DeliveryDetailResponse:
     """Partially update a delivery that has not yet been opened by the operator.
 
-    Only allowed while status == no_leida.  Returns 409 once an operator has
-    opened the delivery (en_verificacion) or after validation (validada).
+    Only allowed while status == no_leida.  Returns 409 for any other status.
+    Fail-safe: only statuses in _EDITABLE_STATUSES are permitted — any future
+    status defaults to non-editable until explicitly added to that set.
 
     Item replacement strategy
     -------------------------
@@ -310,11 +332,20 @@ def update_delivery(
     corrects_id trail.  This is an explicit design decision documented in
     diseno.md §2.a (Pregunta 1).
 
-    Race condition guard
-    --------------------
-    The delivery row is fetched WITH a row-level lock (SELECT FOR UPDATE).
-    This prevents a concurrent /open request from changing the status between
-    the check and the commit.
+    Audit trail
+    -----------
+    updated_at and updated_by are set on every write that produces a real
+    change (supplier_name or items).  These columns are not exposed in the
+    API response — they live in the DB only for internal auditing.
+
+    Concurrency — owner-vs-owner last-write-wins
+    --------------------------------------------
+    En estado no_leida no hay control de concurrencia entre PATCHes del
+    dueño.  El segundo commit gana.  Esto es aceptado porque un solo dueño
+    edita su propio borrador.  See module docstring for full rationale.
+
+    The SELECT FOR UPDATE lock guards against a CONCURRENT operator /open
+    (issue #11) racing with this PATCH — that race IS prevented.
     """
     # Lock the row to prevent a concurrent operator /open from sneaking in.
     delivery = session.scalars(
@@ -326,14 +357,17 @@ def update_delivery(
     if delivery is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Delivery not found")
 
-    if delivery.status in _LOCKED_STATUSES:
+    if delivery.status not in _EDITABLE_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Delivery already opened by operator, cannot edit",
+            detail="Delivery cannot be edited in its current status",
         )
+
+    changed = False
 
     if body.supplier_name is not None:
         delivery.supplier_name = body.supplier_name
+        changed = True
 
     if body.items is not None:
         # Validate new items before touching the database.
@@ -354,6 +388,12 @@ def update_delivery(
                 created_by=current_user.id,
             )
             session.add(item)
+        changed = True
+
+    # Stamp audit columns whenever a real change occurred.
+    if changed:
+        delivery.updated_at = datetime.now(UTC)
+        delivery.updated_by = current_user.id
 
     session.flush()
     return _delivery_to_detail(session, delivery)

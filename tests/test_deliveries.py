@@ -10,6 +10,7 @@ Fixtures inherited from conftest.py:
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 import pytest
 from httpx import AsyncClient
@@ -45,7 +46,7 @@ def _make_product(
 def _make_delivery(
     session: Session,
     owner_id: uuid.UUID,
-    status: str = "no_leida",
+    status: Literal["no_leida", "en_verificacion", "validada"] = "no_leida",
     supplier_name: str = "Proveedor Test",
     created_at: datetime | None = None,
 ) -> Delivery:
@@ -540,7 +541,7 @@ async def test_owner_cannot_edit_en_verificacion_returns_409(
         headers={"Authorization": f"Bearer {owner_token}"},
     )
     assert response.status_code == 409
-    assert "cannot edit" in response.json()["detail"].lower()
+    assert "cannot be edited" in response.json()["detail"].lower()
 
 
 @pytest.mark.asyncio
@@ -633,6 +634,151 @@ async def test_patch_replaces_items_completely_no_corrects_id_trail(
     # Exactly 2 items, one per new product.
     product_ids = {i.product_id for i in all_items}
     assert product_ids == {p2.id, p3.id}
+
+
+@pytest.mark.asyncio
+async def test_patch_with_empty_items_returns_422(
+    client: AsyncClient,
+    db_session: Session,
+    owner_user,
+    owner_token: str,
+) -> None:
+    """PATCH with items=[] must be rejected by the schema validator (422)."""
+    delivery = _make_delivery(db_session, owner_user.id, supplier_name="Proveedor EmptyItems")
+
+    response = await client.patch(
+        f"/api/v1/deliveries/{delivery.id}",
+        json={"items": []},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_patch_supplier_name_empty_string_returns_422(
+    client: AsyncClient,
+    db_session: Session,
+    owner_user,
+    owner_token: str,
+) -> None:
+    """PATCH with supplier_name='' must be rejected (min_length=1) → 422."""
+    delivery = _make_delivery(db_session, owner_user.id, supplier_name="Proveedor EmptyName")
+
+    response = await client.patch(
+        f"/api/v1/deliveries/{delivery.id}",
+        json={"supplier_name": ""},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_patch_records_updated_by(
+    client: AsyncClient,
+    db_session: Session,
+    owner_user,
+    owner_token: str,
+) -> None:
+    """After a PATCH, updated_by in the DB must equal the owner's id."""
+    from sqlalchemy import select as sa_select
+
+    delivery = _make_delivery(db_session, owner_user.id, supplier_name="Proveedor UpdatedBy")
+
+    response = await client.patch(
+        f"/api/v1/deliveries/{delivery.id}",
+        json={"supplier_name": "Nombre Modificado"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert response.status_code == 200
+
+    db_session.expire_all()
+    fresh = db_session.scalars(
+        sa_select(Delivery).where(Delivery.id == delivery.id)
+    ).one()
+    assert fresh.updated_by == owner_user.id
+
+
+@pytest.mark.asyncio
+async def test_patch_records_updated_at(
+    client: AsyncClient,
+    db_session: Session,
+    owner_user,
+    owner_token: str,
+) -> None:
+    """After a PATCH, updated_at in the DB must be a recent UTC timestamp."""
+    from sqlalchemy import select as sa_select
+
+    before = datetime.now(UTC)
+    delivery = _make_delivery(db_session, owner_user.id, supplier_name="Proveedor UpdatedAt")
+
+    response = await client.patch(
+        f"/api/v1/deliveries/{delivery.id}",
+        json={"supplier_name": "Nombre Con Timestamp"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert response.status_code == 200
+
+    db_session.expire_all()
+    fresh = db_session.scalars(
+        sa_select(Delivery).where(Delivery.id == delivery.id)
+    ).one()
+    assert fresh.updated_at is not None
+    # Allow 5 seconds of clock slack; the timestamp must be after we started.
+    from datetime import timedelta as td
+    assert fresh.updated_at >= before - td(seconds=5)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_patches_last_write_wins(
+    client: AsyncClient,
+    db_session: Session,
+    owner_user,
+    owner_token: str,
+) -> None:
+    """Two sequential PATCHes from the same owner: the second one wins.
+
+    This test documents the accepted last-write-wins behaviour for no_leida
+    deliveries.  There is NO optimistic locking or ETag — the second commit
+    simply overwrites the first.  See module docstring for rationale.
+    """
+    delivery = _make_delivery(db_session, owner_user.id, supplier_name="Proveedor Concurrent")
+
+    first = await client.patch(
+        f"/api/v1/deliveries/{delivery.id}",
+        json={"supplier_name": "Primer escritor"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert first.status_code == 200
+
+    second = await client.patch(
+        f"/api/v1/deliveries/{delivery.id}",
+        json={"supplier_name": "Segundo escritor gana"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert second.status_code == 200
+    assert second.json()["supplier_name"] == "Segundo escritor gana"
+
+
+@pytest.mark.asyncio
+async def test_delivery_detail_does_not_expose_created_by(
+    client: AsyncClient,
+    db_session: Session,
+    owner_user,
+    owner_token: str,
+) -> None:
+    """GET /{id} response must NOT contain the created_by field.
+
+    The operator must not see the owner's UUID in the detail response.
+    Traceability lives in the DB, not in the public API.
+    """
+    delivery = _make_delivery(db_session, owner_user.id, supplier_name="Proveedor NoCreadoPor")
+
+    response = await client.get(
+        f"/api/v1/deliveries/{delivery.id}",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert response.status_code == 200
+    assert "created_by" not in response.json()
 
 
 @pytest.mark.asyncio

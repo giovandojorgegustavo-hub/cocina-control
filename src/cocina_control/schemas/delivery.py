@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import (
     BaseModel,
@@ -109,21 +109,26 @@ class DeliveryListItem(BaseModel):
 
     id: uuid.UUID
     supplier_name: str
-    status: str
+    status: Literal["no_leida", "en_verificacion", "validada"]
     item_count: int
     created_at: datetime
 
 
 class DeliveryDetailResponse(BaseModel):
-    """Full response for POST, GET /{id}, and PATCH /{id}."""
+    """Full response for POST, GET /{id}, and PATCH /{id}.
+
+    created_by is intentionally excluded: traceability lives in the DB, not
+    in the public API.  The operator must not see the owner's UUID on every
+    detail response.  If the owner ever needs audit information, a dedicated
+    endpoint or query flag will be added — not exposed by default.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
     supplier_name: str
-    status: str
+    status: Literal["no_leida", "en_verificacion", "validada"]
     created_at: datetime
-    created_by: uuid.UUID
     validated_at: datetime | None
     validated_by: uuid.UUID | None
     items: list[DeliveryItemResponse]
