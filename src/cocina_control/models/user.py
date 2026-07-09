@@ -1,19 +1,23 @@
 import uuid
-from datetime import UTC, datetime
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, mapped_column
 
 from cocina_control.db import Base
+from cocina_control.models.base import TimestampMixin
 
 _ROLE_ENUM = sa.Enum("operator", "owner", name="user_role", create_type=True)
 
 
-def _utcnow() -> datetime:
-    return datetime.now(UTC)
+class User(Base, TimestampMixin):
+    """Application user (operator or owner).
 
+    Email uniqueness is enforced via a case-insensitive functional index
+    (ix_users_email_lower) on lower(email).  The application layer MUST
+    normalize email to lowercase before persisting so that lookups and
+    the unique constraint are consistent.
+    """
 
-class User(Base):
     __tablename__ = "users"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -22,11 +26,7 @@ class User(Base):
         default=uuid.uuid4,
     )
     name: Mapped[str] = mapped_column(sa.Text, nullable=False)
-    email: Mapped[str] = mapped_column(sa.Text, nullable=False, unique=True, index=True)
+    # No unique=True here — uniqueness is enforced by ix_users_email_lower (see migration).
+    email: Mapped[str] = mapped_column(sa.Text, nullable=False)
     password_hash: Mapped[str] = mapped_column(sa.Text, nullable=False)
     role: Mapped[str] = mapped_column(_ROLE_ENUM, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True),
-        default=_utcnow,
-        nullable=False,
-    )

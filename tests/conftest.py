@@ -1,6 +1,7 @@
 """Pytest configuration and fixtures for cocina-control tests."""
 
 import os
+import shutil
 from collections.abc import Generator
 
 import pytest
@@ -16,11 +17,18 @@ from cocina_control.main import app
 # done inside the postgres_url fixture to stay session-scoped.
 # ---------------------------------------------------------------------------
 
+# Resolve pg_ctl path: env override → PATH lookup → known fallback.
+PG_CTL_PATH = (
+    os.getenv("PGCTL_PATH")
+    or shutil.which("pg_ctl")
+    or "/usr/lib/postgresql/16/bin/pg_ctl"
+)
+
 try:
     from pytest_postgresql.factories import postgresql_proc
 
     postgresql_proc = postgresql_proc(  # type: ignore[assignment]
-        executable="/usr/lib/postgresql/16/bin/pg_ctl",
+        executable=PG_CTL_PATH,
         host="127.0.0.1",
         port=None,  # random port — avoids collisions in parallel runs
         user="fiax",
@@ -119,11 +127,13 @@ def db_session(db_engine) -> Generator[Session, None, None]:
     """Open a SAVEPOINT; roll back after each test so every test starts clean.
 
     The session is bound to a single connection that wraps everything in
-    a transaction (outer) + savepoint (inner).  If the test rolls back
-    the savepoint (e.g. after an IntegrityError), we re-open a new one
-    before yielding back — this keeps the outer transaction alive for the
-    final rollback.  If the test rolls back the outer transaction itself
-    (which is unusual), cleanup is a no-op.
+    a transaction (outer) + savepoint (inner).  The conftest rolls back
+    the outer transaction in teardown — it does NOT re-open the savepoint
+    automatically.  Tests that need to catch an IntegrityError must wrap
+    the failing flush in their own ``with db_session.begin_nested():`` block
+    so the inner savepoint absorbs the error and the outer transaction stays
+    alive.  Calling ``session.commit()`` directly from a test bypasses the
+    outer transaction and breaks isolation.
     """
     from sqlalchemy.orm import sessionmaker
 

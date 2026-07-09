@@ -6,7 +6,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, mapped_column
 
 from cocina_control.db import Base
-from cocina_control.models.base import TimestampMixin
+from cocina_control.models.base import AppendOnlyMixin, TimestampMixin
 
 _INVENTORY_COUNT_STATUS_ENUM = sa.Enum(
     "in_progress", "completed",
@@ -47,12 +47,21 @@ class InventoryCount(Base, TimestampMixin):
     )
 
 
-class InventoryCountItem(Base, TimestampMixin):
+class InventoryCountItem(Base, AppendOnlyMixin):
     __tablename__ = "inventory_count_items"
 
     __table_args__ = (
         sa.Index("ix_inventory_count_items_count_id", "inventory_count_id"),
         sa.Index("ix_inventory_count_items_product_id", "product_id"),
+        sa.Index("ix_inventory_count_items_corrects_id", "corrects_id"),
+        sa.CheckConstraint(
+            "corrects_id IS DISTINCT FROM id",
+            name="ck_inventory_count_items_no_self_correction",
+        ),
+        sa.CheckConstraint(
+            "quantity >= 0",
+            name="ck_inventory_count_items_quantity_nonneg",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -67,9 +76,6 @@ class InventoryCountItem(Base, TimestampMixin):
         sa.ForeignKey("products.id", ondelete="RESTRICT"), nullable=False
     )
     quantity: Mapped[Decimal] = mapped_column(sa.Numeric, nullable=False)
-    created_by: Mapped[uuid.UUID] = mapped_column(
-        sa.ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
-    )
     corrects_id: Mapped[uuid.UUID | None] = mapped_column(
         sa.ForeignKey("inventory_count_items.id", ondelete="RESTRICT"), nullable=True
     )

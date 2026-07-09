@@ -19,6 +19,10 @@ class Product(Base, TimestampMixin):
             "name",
             postgresql_where=sa.text("is_active = true"),
         ),
+        sa.CheckConstraint(
+            "low_stock_threshold IS NULL OR low_stock_threshold > 0",
+            name="ck_products_low_stock_threshold_positive",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

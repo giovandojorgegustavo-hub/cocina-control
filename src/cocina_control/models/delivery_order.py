@@ -6,7 +6,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, mapped_column
 
 from cocina_control.db import Base
-from cocina_control.models.base import TimestampMixin
+from cocina_control.models.base import AppendOnlyMixin, TimestampMixin
 
 _DELIVERY_ORDER_STATUS_ENUM = sa.Enum(
     "pending", "completed",
@@ -20,6 +20,19 @@ class DeliveryOrder(Base, TimestampMixin):
 
     __table_args__ = (
         sa.Index("ix_delivery_orders_status", "status"),
+        sa.Index("ix_delivery_orders_corrects_id", "corrects_id"),
+        sa.CheckConstraint(
+            "corrects_id IS DISTINCT FROM id",
+            name="ck_delivery_orders_no_self_correction",
+        ),
+        sa.CheckConstraint(
+            "(photo_at IS NULL) = (photo_by IS NULL)",
+            name="ck_delivery_orders_photo_parity",
+        ),
+        sa.CheckConstraint(
+            "(completed_at IS NULL) = (completed_by IS NULL)",
+            name="ck_delivery_orders_completed_parity",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -52,12 +65,21 @@ class DeliveryOrder(Base, TimestampMixin):
     )
 
 
-class DeliveryOrderItem(Base, TimestampMixin):
+class DeliveryOrderItem(Base, AppendOnlyMixin):
     __tablename__ = "delivery_order_items"
 
     __table_args__ = (
         sa.Index("ix_delivery_order_items_order_id", "delivery_order_id"),
         sa.Index("ix_delivery_order_items_product_id", "product_id"),
+        sa.Index("ix_delivery_order_items_corrects_id", "corrects_id"),
+        sa.CheckConstraint(
+            "corrects_id IS DISTINCT FROM id",
+            name="ck_delivery_order_items_no_self_correction",
+        ),
+        sa.CheckConstraint(
+            "quantity > 0",
+            name="ck_delivery_order_items_quantity_positive",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -72,9 +94,6 @@ class DeliveryOrderItem(Base, TimestampMixin):
         sa.ForeignKey("products.id", ondelete="RESTRICT"), nullable=False
     )
     quantity: Mapped[Decimal] = mapped_column(sa.Numeric, nullable=False)
-    created_by: Mapped[uuid.UUID] = mapped_column(
-        sa.ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
-    )
     corrects_id: Mapped[uuid.UUID | None] = mapped_column(
         sa.ForeignKey("delivery_order_items.id", ondelete="RESTRICT"), nullable=True
     )

@@ -5,8 +5,10 @@ conftest.py runs `alembic upgrade head` before the session starts and
 `alembic downgrade base` after it finishes.
 """
 
+import os
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import inspect
@@ -193,3 +195,148 @@ def test_migration_downgrade_drops_all_tables(postgres_url: str):
 
     # Restore schema so the session-scoped fixtures remain functional.
     command.upgrade(cfg, "head")
+
+
+# ---------------------------------------------------------------------------
+# New tests: QA/security corrections
+# ---------------------------------------------------------------------------
+
+
+def _make_product(user_id: uuid.UUID) -> dict:
+    return {
+        "id": uuid.uuid4(),
+        "name": f"prod-{uuid.uuid4().hex[:6]}",
+        "unit": "kg",
+        "created_by": user_id,
+    }
+
+
+def _make_delivery(user_id: uuid.UUID) -> dict:
+    return {
+        "id": uuid.uuid4(),
+        "supplier_name": "Proveedor Test",
+        "status": "no_leida",
+        "created_by": user_id,
+    }
+
+
+def test_corrects_id_self_reference_rejected(db_session: Session):
+    """A DeliveryItem pointing corrects_id at its own id must be rejected."""
+    from cocina_control.models.delivery import Delivery, DeliveryItem
+    from cocina_control.models.product import Product
+    from cocina_control.models.user import User
+
+    user = User(**_make_user())
+    db_session.add(user)
+    db_session.flush()
+
+    product = Product(**_make_product(user.id))
+    db_session.add(product)
+    db_session.flush()
+
+    delivery = Delivery(**_make_delivery(user.id))
+    db_session.add(delivery)
+    db_session.flush()
+
+    item_id = uuid.uuid4()
+    item = DeliveryItem(
+        id=item_id,
+        delivery_id=delivery.id,
+        product_id=product.id,
+        announced_qty=Decimal("5"),
+        created_by=user.id,
+        corrects_id=item_id,  # self-reference — must fail
+    )
+    db_session.add(item)
+    with pytest.raises(IntegrityError):
+        with db_session.begin_nested():
+            db_session.flush()
+
+
+def test_email_case_insensitive_unique(db_session: Session):
+    """Inserting two users whose emails differ only by case must raise IntegrityError."""
+    from cocina_control.models.user import User
+
+    user1 = User(**_make_user(name="Alice", email="Juan@test.com"))
+    db_session.add(user1)
+    db_session.flush()
+
+    user2 = User(**_make_user(name="Bob", email="juan@test.com"))
+    db_session.add(user2)
+    with pytest.raises(IntegrityError):
+        with db_session.begin_nested():
+            db_session.flush()
+
+
+def test_downgrade_prohibited_in_prod(postgres_url: str):
+    """With COCINA_APP_ENV=prod, alembic downgrade must raise RuntimeError."""
+    from alembic import command
+    from alembic.config import Config
+
+    cfg = Config()
+    cfg.set_main_option("script_location", "migrations")
+    cfg.set_main_option("sqlalchemy.url", postgres_url)
+
+    original = os.environ.get("COCINA_APP_ENV")
+    os.environ["COCINA_APP_ENV"] = "prod"
+    try:
+        with pytest.raises(RuntimeError, match="Downgrade prohibited in production"):
+            command.downgrade(cfg, "base")
+    finally:
+        if original is None:
+            os.environ.pop("COCINA_APP_ENV", None)
+        else:
+            os.environ["COCINA_APP_ENV"] = original
+
+
+def test_negative_quantity_rejected(db_session: Session):
+    """Inserting a DeliveryItem with announced_qty <= 0 must raise IntegrityError."""
+    from cocina_control.models.delivery import Delivery, DeliveryItem
+    from cocina_control.models.product import Product
+    from cocina_control.models.user import User
+
+    user = User(**_make_user())
+    db_session.add(user)
+    db_session.flush()
+
+    product = Product(**_make_product(user.id))
+    db_session.add(product)
+    db_session.flush()
+
+    delivery = Delivery(**_make_delivery(user.id))
+    db_session.add(delivery)
+    db_session.flush()
+
+    item = DeliveryItem(
+        id=uuid.uuid4(),
+        delivery_id=delivery.id,
+        product_id=product.id,
+        announced_qty=Decimal("-5"),  # must fail
+        created_by=user.id,
+    )
+    db_session.add(item)
+    with pytest.raises(IntegrityError):
+        with db_session.begin_nested():
+            db_session.flush()
+
+
+def test_photo_parity_check(db_session: Session):
+    """A DeliveryOrder with photo_at set but photo_by NULL must raise IntegrityError."""
+    from cocina_control.models.delivery_order import DeliveryOrder
+    from cocina_control.models.user import User
+
+    user = User(**_make_user())
+    db_session.add(user)
+    db_session.flush()
+
+    order = DeliveryOrder(
+        id=uuid.uuid4(),
+        status="pending",
+        created_by=user.id,
+        photo_at=datetime.now(UTC),  # set
+        photo_by=None,               # not set — parity violation
+    )
+    db_session.add(order)
+    with pytest.raises(IntegrityError):
+        with db_session.begin_nested():
+            db_session.flush()
