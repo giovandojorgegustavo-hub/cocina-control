@@ -5,10 +5,14 @@ import shutil
 import uuid
 from collections.abc import Generator
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.orm import Session
+
+if TYPE_CHECKING:
+    from cocina_control.models.user import User
 
 # ---------------------------------------------------------------------------
 # Test environment defaults — set BEFORE any cocina_control module is imported.
@@ -209,7 +213,7 @@ def create_test_user(
     role: str,
     email: str,
     password: str = _TEST_PASSWORD,
-):
+) -> "User":
     """Insert and return a User with the given role."""
     from cocina_control.models.user import User
     from cocina_control.security.passwords import hash_password

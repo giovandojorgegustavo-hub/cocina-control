@@ -20,14 +20,16 @@ class UnitEnum(StrEnum):
 
 
 def _validate_name(value: str) -> str:
-    """Strip whitespace then upper-case.
+    """Normalise name: strip outer whitespace, collapse internal runs, upper-case.
 
+    "palta  semilla" and "palta\tsemilla" both become "PALTA SEMILLA".
     A name composed entirely of whitespace is rejected (400-level error).
     """
     stripped = value.strip()
     if not stripped:
         raise ValueError("name must not be blank or whitespace-only")
-    return stripped.upper()
+    collapsed = " ".join(stripped.split())
+    return collapsed.upper()
 
 
 # ---------------------------------------------------------------------------
@@ -36,7 +38,7 @@ def _validate_name(value: str) -> str:
 
 
 class ProductCreate(BaseModel):
-    name: Annotated[str, Field(min_length=1)]
+    name: Annotated[str, Field(min_length=1, max_length=255)]
     unit: UnitEnum
     low_stock_threshold: Annotated[
         Decimal | None,
@@ -52,7 +54,7 @@ class ProductCreate(BaseModel):
 class ProductUpdate(BaseModel):
     """All fields are optional — only provided fields are updated."""
 
-    name: Annotated[str | None, Field(default=None, min_length=1)] = None
+    name: Annotated[str | None, Field(default=None, min_length=1, max_length=255)] = None
     unit: UnitEnum | None = None
     low_stock_threshold: Annotated[
         Decimal | None,

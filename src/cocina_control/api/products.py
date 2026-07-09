@@ -12,13 +12,15 @@ Invariants
 - Products are never physically deleted; is_active is set to false.
 - Name uniqueness is enforced only among active products (partial unique index).
 - name is always stored in UPPER CASE.
+- Every mutation (PATCH, soft-DELETE) records updated_by and updated_at.
 """
 
 import uuid
-from typing import Annotated
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from cocina_control.api.deps import get_current_user, require_role
@@ -34,12 +36,16 @@ from cocina_control.schemas.product import (
 
 router = APIRouter(prefix="/products", tags=["products"])
 
+# Constraint name that guards active-product name uniqueness (migration 0002).
+_NAME_UNIQUE_CONSTRAINT = "ix_products_name_active_unique"
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _get_active_product_or_404(session: Session, product_id: uuid.UUID) -> Product:
+def _get_product_or_404(session: Session, product_id: uuid.UUID) -> Product:
     """Return the product by id. Raises 404 if it does not exist."""
     product = session.get(Product, product_id)
     if product is None:
@@ -72,6 +78,10 @@ def _assert_name_not_taken(
         )
 
 
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
 # ---------------------------------------------------------------------------
 # GET /products
 # ---------------------------------------------------------------------------
@@ -83,8 +93,8 @@ def _assert_name_not_taken(
     summary="List active products",
 )
 def list_products(
-    session: Annotated[Session, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    session: Session = Depends(get_session),
+    _current_user: User = Depends(get_current_user),
 ) -> list[Product]:
     """Return all active products ordered alphabetically by name."""
     stmt = (
@@ -108,12 +118,12 @@ def list_products(
 )
 def create_product(
     body: ProductCreate,
-    session: Annotated[Session, Depends(get_session)],
-    current_user: Annotated[User, Depends(require_role("owner"))],
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_role("owner")),
 ) -> Product:
     """Create a new product in the catalogue.
 
-    - name is normalised to UPPER CASE by the schema before reaching here.
+    - name is normalised to UPPER CASE (with internal whitespace collapsed) by the schema.
     - Duplicate name among active products returns 409.
     """
     _assert_name_not_taken(session, body.name)
@@ -127,7 +137,17 @@ def create_product(
         created_by=current_user.id,
     )
     session.add(product)
-    session.flush()
+    try:
+        session.flush()
+    except IntegrityError as exc:
+        session.rollback()
+        if _NAME_UNIQUE_CONSTRAINT in str(exc.orig):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Product name already exists",
+            ) from exc
+        raise
+
     return product
 
 
@@ -144,20 +164,21 @@ def create_product(
 def update_product(
     product_id: uuid.UUID,
     body: ProductUpdate,
-    session: Annotated[Session, Depends(get_session)],
-    _current_user: Annotated[User, Depends(require_role("owner"))],
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_role("owner")),
 ) -> Product:
     """Partially update a product.
 
-    - Only active products can be edited; 409 if the product is inactive.
+    - Only active products can be edited; 404 if the product does not exist or is inactive.
     - If name changes, checks for collision with other active products.
+    - Records updated_by and updated_at on every successful mutation.
     """
-    product = _get_active_product_or_404(session, product_id)
+    product = _get_product_or_404(session, product_id)
 
     if not product.is_active:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="product is inactive",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found",
         )
 
     if body.name is not None and body.name != product.name:
@@ -170,7 +191,20 @@ def update_product(
     if body.low_stock_threshold is not None:
         product.low_stock_threshold = body.low_stock_threshold
 
-    session.flush()
+    product.updated_by = current_user.id
+    product.updated_at = _utcnow()
+
+    try:
+        session.flush()
+    except IntegrityError as exc:
+        session.rollback()
+        if _NAME_UNIQUE_CONSTRAINT in str(exc.orig):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Product name already exists",
+            ) from exc
+        raise
+
     return product
 
 
@@ -186,21 +220,24 @@ def update_product(
 )
 def delete_product(
     product_id: uuid.UUID,
-    session: Annotated[Session, Depends(get_session)],
-    _current_user: Annotated[User, Depends(require_role("owner"))],
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_role("owner")),
 ) -> None:
     """Soft-delete a product by setting is_active = false.
 
-    Returns 409 if the product is already inactive.
+    Returns 404 if the product does not exist or is already inactive.
+    Records updated_by and updated_at before deactivating.
     The row is never physically removed from the database.
     """
-    product = _get_active_product_or_404(session, product_id)
+    product = _get_product_or_404(session, product_id)
 
     if not product.is_active:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="already inactive",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found",
         )
 
+    product.updated_by = current_user.id
+    product.updated_at = _utcnow()
     product.is_active = False
     session.flush()

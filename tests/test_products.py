@@ -219,6 +219,60 @@ async def test_create_product_name_whitespace_only_returns_400_or_422(
         )
 
 
+@pytest.mark.asyncio
+async def test_create_product_normalizes_internal_whitespace(
+    client: AsyncClient,
+    owner_token: str,
+) -> None:
+    """Internal whitespace runs (spaces, tabs) are collapsed to a single space and uppercased."""
+    for raw_name in ("palta\tsemilla", "palta  semilla"):
+        response = await client.post(
+            "/api/v1/products",
+            json={"name": raw_name, "unit": "kg"},
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        # One of them will succeed (201) and the other will conflict (409) because
+        # both normalise to the same "PALTA SEMILLA". We only assert the name shape
+        # when the creation succeeds.
+        if response.status_code == 201:
+            assert response.json()["name"] == "PALTA SEMILLA"
+        else:
+            assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_create_product_normalized_name_conflict(
+    client: AsyncClient,
+    db_session: Session,
+    owner_user,
+    owner_token: str,
+) -> None:
+    """After inserting 'PALTA SEMILLA', sending 'palta semilla' (tab) must return 409."""
+    _make_product(db_session, owner_user.id, "PALTA SEMILLA")
+
+    response = await client.post(
+        "/api/v1/products",
+        json={"name": "palta\tsemilla", "unit": "kg"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_create_product_name_too_long_returns_422(
+    client: AsyncClient,
+    owner_token: str,
+) -> None:
+    """A name exceeding 255 characters must return 422."""
+    long_name = "A" * 300
+    response = await client.post(
+        "/api/v1/products",
+        json={"name": long_name, "unit": "kg"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert response.status_code == 422
+
+
 # ---------------------------------------------------------------------------
 # PATCH /api/v1/products/{id}
 # ---------------------------------------------------------------------------
@@ -263,13 +317,13 @@ async def test_patch_product_rename_normalizes_uppercase(
 
 
 @pytest.mark.asyncio
-async def test_patch_product_inactive_returns_409(
+async def test_patch_product_inactive_returns_404(
     client: AsyncClient,
     db_session: Session,
     owner_user,
     owner_token: str,
 ) -> None:
-    """PATCH on an inactive product must return 409."""
+    """PATCH on an inactive product must return 404 (not a visible conflict)."""
     product = _make_product(db_session, owner_user.id, "CEBOLLA", is_active=False)
 
     response = await client.patch(
@@ -277,8 +331,7 @@ async def test_patch_product_inactive_returns_409(
         json={"unit": "kg"},
         headers={"Authorization": f"Bearer {owner_token}"},
     )
-    assert response.status_code == 409
-    assert "inactive" in response.json()["detail"]
+    assert response.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -313,6 +366,48 @@ async def test_patch_nonexistent_product_returns_404(
     assert response.status_code == 404
 
 
+@pytest.mark.asyncio
+async def test_patch_operator_on_nonexistent_returns_403(
+    client: AsyncClient,
+    operator_token: str,
+) -> None:
+    """Operator hitting PATCH on a non-existent product gets 403, not 404.
+
+    Authorization is checked before loading the resource, so the operator
+    cannot probe whether a product exists or not.
+    """
+    response = await client.patch(
+        f"/api/v1/products/{uuid.uuid4()}",
+        json={"unit": "kg"},
+        headers={"Authorization": f"Bearer {operator_token}"},
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_patch_records_updated_by(
+    client: AsyncClient,
+    db_session: Session,
+    owner_user,
+    owner_token: str,
+) -> None:
+    """PATCH as owner sets updated_by to the owner's id in the database."""
+    product = _make_product(db_session, owner_user.id, "FIDEOS")
+
+    response = await client.patch(
+        f"/api/v1/products/{product.id}",
+        json={"unit": "un"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert response.status_code == 200
+
+    db_session.expire(product)
+    refreshed = db_session.get(Product, product.id)
+    assert refreshed is not None
+    assert refreshed.updated_by == owner_user.id
+    assert refreshed.updated_at is not None
+
+
 # ---------------------------------------------------------------------------
 # DELETE /api/v1/products/{id}
 # ---------------------------------------------------------------------------
@@ -342,21 +437,20 @@ async def test_delete_product_soft_delete_only(
 
 
 @pytest.mark.asyncio
-async def test_delete_product_already_inactive_returns_409(
+async def test_delete_product_already_inactive_returns_404(
     client: AsyncClient,
     db_session: Session,
     owner_user,
     owner_token: str,
 ) -> None:
-    """DELETEing an already inactive product must return 409."""
+    """DELETEing an already inactive product must return 404."""
     product = _make_product(db_session, owner_user.id, "VINAGRE", is_active=False)
 
     response = await client.delete(
         f"/api/v1/products/{product.id}",
         headers={"Authorization": f"Bearer {owner_token}"},
     )
-    assert response.status_code == 409
-    assert "inactive" in response.json()["detail"]
+    assert response.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -374,3 +468,57 @@ async def test_delete_product_operator_returns_403(
         headers={"Authorization": f"Bearer {operator_token}"},
     )
     assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_delete_nonexistent_product_returns_404(
+    client: AsyncClient,
+    owner_token: str,
+) -> None:
+    """DELETE with an invented UUID as owner must return 404."""
+    response = await client.delete(
+        f"/api/v1/products/{uuid.uuid4()}",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_operator_on_nonexistent_returns_403(
+    client: AsyncClient,
+    operator_token: str,
+) -> None:
+    """Operator hitting DELETE on a non-existent product gets 403, not 404.
+
+    Authorization is checked before loading the resource, so the operator
+    cannot probe whether a product exists or not.
+    """
+    response = await client.delete(
+        f"/api/v1/products/{uuid.uuid4()}",
+        headers={"Authorization": f"Bearer {operator_token}"},
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_delete_records_updated_by(
+    client: AsyncClient,
+    db_session: Session,
+    owner_user,
+    owner_token: str,
+) -> None:
+    """DELETE (soft) as owner sets updated_by to the owner's id in the database."""
+    product = _make_product(db_session, owner_user.id, "AZUCAR")
+
+    response = await client.delete(
+        f"/api/v1/products/{product.id}",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert response.status_code == 204
+
+    db_session.expire(product)
+    refreshed = db_session.get(Product, product.id)
+    assert refreshed is not None
+    assert refreshed.is_active is False
+    assert refreshed.updated_by == owner_user.id
+    assert refreshed.updated_at is not None
