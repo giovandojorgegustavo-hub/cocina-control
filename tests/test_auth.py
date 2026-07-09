@@ -22,7 +22,7 @@ from cocina_control.security.passwords import hash_password
 from cocina_control.security.rate_limit import reset as reset_rate_limit
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helpers — local copy; shared fixtures (owner_user, etc.) live in conftest.py.
 # ---------------------------------------------------------------------------
 
 _TEST_PASSWORD = "correct-horse-battery-staple"
@@ -49,35 +49,6 @@ def create_test_user(
     session.add(user)
     session.flush()
     return user
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def owner_user(db_session: Session) -> User:
-    return create_test_user(db_session, "owner", f"owner-{uuid.uuid4().hex[:6]}@test.com")
-
-
-@pytest.fixture
-def operator_user(db_session: Session) -> User:
-    return create_test_user(db_session, "operator", f"op-{uuid.uuid4().hex[:6]}@test.com")
-
-
-@pytest.fixture
-def owner_token(owner_user: User) -> str:
-    from cocina_control.security.tokens import create_access_token
-
-    return create_access_token(owner_user.id, owner_user.role)
-
-
-@pytest.fixture
-def operator_token(operator_user: User) -> str:
-    from cocina_control.security.tokens import create_access_token
-
-    return create_access_token(operator_user.id, operator_user.role)
 
 
 # ---------------------------------------------------------------------------
