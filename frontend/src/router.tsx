@@ -6,6 +6,9 @@ import { Verificacion } from './pages/Verificacion'
 import { NuevoPedido } from './pages/NuevoPedido'
 import { BandejaPedidos } from './pages/BandejaPedidos'
 import { CompletarPedido } from './pages/CompletarPedido'
+import { InventarioLista } from './pages/InventarioLista'
+import { ContarProducto } from './pages/ContarProducto'
+import { InventarioCompletado } from './pages/InventarioCompletado'
 import { RequireAuth, RequireRole } from './lib/guards'
 
 function OwnerPlaceholder() {
@@ -52,14 +55,31 @@ export const router = createBrowserRouter([
     ),
   },
   {
-    // Placeholder for Frontend #6 — inventory screen
     path: '/inventario',
     element: (
       <RequireAuth>
         <RequireRole role="operator">
-          <div className="min-h-screen flex items-center justify-center bg-gray-50">
-            <p className="text-gray-500 text-sm">Inventario — viene en Frontend #6</p>
-          </div>
+          <InventarioLista />
+        </RequireRole>
+      </RequireAuth>
+    ),
+  },
+  {
+    path: '/inventario/contar/:productId',
+    element: (
+      <RequireAuth>
+        <RequireRole role="operator">
+          <ContarProducto />
+        </RequireRole>
+      </RequireAuth>
+    ),
+  },
+  {
+    path: '/inventario/completado',
+    element: (
+      <RequireAuth>
+        <RequireRole role="operator">
+          <InventarioCompletado />
         </RequireRole>
       </RequireAuth>
     ),

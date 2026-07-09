@@ -42,3 +42,21 @@ export function formatRelativeDate(iso: string, now = new Date()): string {
   const mo = String(localDate.getUTCMonth() + 1).padStart(2, '0')
   return `${dd}/${mo} ${timeStr}`
 }
+
+// ---------------------------------------------------------------------------
+// Format a date as "DD de MES" in Spanish for the inventory count header.
+// Uses UTC-3 (Argentina) as the local timezone.
+// ---------------------------------------------------------------------------
+
+const MONTHS_ES = [
+  'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+  'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
+]
+
+export function formatDayMonth(iso: string): string {
+  const OFFSET_MS = 3 * 60 * 60 * 1000
+  const date = new Date(new Date(iso).getTime() - OFFSET_MS)
+  const day = date.getUTCDate()
+  const month = MONTHS_ES[date.getUTCMonth()]
+  return `${day} de ${month}`
+}
