@@ -216,14 +216,19 @@ def _entries_qty_since(
     session: Session, product_id: uuid.UUID, since_dt: datetime
 ) -> Decimal:
     """Sum of received_qty (or announced_qty fallback) of leaf delivery_items
-    whose parent delivery is 'validada' and validated_at >= since_dt.
+    whose parent delivery is 'validada' and validated_at > since_dt (strict).
+
+    The strict inequality avoids double-counting the boundary event when
+    since_dt is the completed_at of the last inventory count: the count itself
+    already captures the stock at that instant, so deliveries validated exactly
+    AT that timestamp should not be counted again.
 
     Used by stock_now calculation.
     """
     validated_deliveries = session.scalars(
         select(Delivery).where(
             Delivery.status == "validada",
-            Delivery.validated_at >= since_dt,
+            Delivery.validated_at > since_dt,
         )
     ).all()
     if not validated_deliveries:
@@ -252,14 +257,18 @@ def _orders_qty_since(
     session: Session, product_id: uuid.UUID, since_dt: datetime
 ) -> Decimal:
     """Sum of quantity of leaf delivery_order_items whose parent order is
-    'completed' and completed_at >= since_dt.
+    'completed' and completed_at > since_dt (strict).
+
+    The strict inequality is symmetric with _entries_qty_since: avoids counting
+    orders completed exactly AT the last-count timestamp, which would be
+    inconsistent with the stock baseline captured by that count.
 
     Used by stock_now calculation.
     """
     completed_orders = session.scalars(
         select(DeliveryOrder).where(
             DeliveryOrder.status == "completed",
-            DeliveryOrder.completed_at >= since_dt,
+            DeliveryOrder.completed_at > since_dt,
         )
     ).all()
     if not completed_orders:
@@ -426,23 +435,48 @@ def compute_summary(
                 )
             )
 
-    # Orders summary in range — based on created_at of the order.
-    all_orders_in_range = session.scalars(
+    # Orders summary — counts use event-specific timestamps, not created_at.
+    #
+    # completed_count: leaf orders whose completed_at falls in [from_dt, to_dt].
+    #   Using completed_at is consistent with the consumption calculation
+    #   (_orders_qty_since uses completed_at) and represents when the order
+    #   was actually fulfilled, not when it was opened.
+    #
+    # photo_only_count: leaf orders whose photo_at falls in [from_dt, to_dt]
+    #   but whose completed_at is NULL or outside the range.  These are orders
+    #   that were photographed (operator registered them) but never completed.
+    #   Note: a "cancelled" order in this model is a pending order that has been
+    #   superseded by a corrector row (corrects_id pointing to it).  The leaf
+    #   filter already excludes such orders.
+    completed_orders_in_range = session.scalars(
         select(DeliveryOrder).where(
-            DeliveryOrder.created_at >= from_dt,
-            DeliveryOrder.created_at <= to_dt,
+            DeliveryOrder.status == "completed",
+            DeliveryOrder.completed_at >= from_dt,
+            DeliveryOrder.completed_at <= to_dt,
         )
     ).all()
+    # Among completed orders, keep only leaf orders (not corrected by another).
+    completed_corrected_ids = {
+        o.corrects_id for o in completed_orders_in_range if o.corrects_id is not None
+    }
+    completed_count = sum(
+        1 for o in completed_orders_in_range if o.id not in completed_corrected_ids
+    )
 
-    # Filter to non-cancelled: corrects_id == None means it's an original (not a cancellation).
-    # An order that HAS corrects_id is itself a cancellation/correction record.
-    # A cancelled original order has a corrector row pointing to it — but the original
-    # is still in the list.  For the summary we count originals only (leaf orders).
-    order_corrected_ids = {o.corrects_id for o in all_orders_in_range if o.corrects_id is not None}
-    leaf_orders = [o for o in all_orders_in_range if o.id not in order_corrected_ids]
-
-    completed_count = sum(1 for o in leaf_orders if o.status == "completed")
-    photo_only_count = sum(1 for o in leaf_orders if o.status == "pending")
+    photo_only_orders_in_range = session.scalars(
+        select(DeliveryOrder).where(
+            DeliveryOrder.status == "pending",
+            DeliveryOrder.photo_at >= from_dt,
+            DeliveryOrder.photo_at <= to_dt,
+        )
+    ).all()
+    # Leaf filter: exclude orders that have a corrector (cancelled originals).
+    photo_corrected_ids = {
+        o.corrects_id for o in photo_only_orders_in_range if o.corrects_id is not None
+    }
+    photo_only_count = sum(
+        1 for o in photo_only_orders_in_range if o.id not in photo_corrected_ids
+    )
 
     return DashboardSummaryResponse(
         products=product_items,
@@ -478,8 +512,10 @@ def compute_traceability(
     user_id_set: set[uuid.UUID] = set()
 
     # --- delivery_items ---
-    # Include items whose parent delivery is 'validada' and validated_at in range.
-    # Also include corrections created_at in range regardless of delivery status.
+    # Only include items whose parent delivery is 'validada' and validated_at in range.
+    # Items of pending or non-validated deliveries must NOT appear in traceability
+    # because they represent unconfirmed stock movements that could inflate or
+    # distort the forensic record.
     validated_deliveries = session.scalars(
         select(Delivery).where(
             Delivery.status == "validada",
@@ -489,15 +525,6 @@ def compute_traceability(
     ).all()
     delivery_ids_in_range = {d.id for d in validated_deliveries}
 
-    # Also grab any delivery_items created_at in range (captures corrections).
-    all_delivery_items = session.scalars(
-        select(DeliveryItem).where(
-            DeliveryItem.product_id == product_id,
-            DeliveryItem.created_at >= from_dt,
-            DeliveryItem.created_at <= to_dt,
-        )
-    ).all()
-    # Union: items from in-range validated deliveries + items created in range.
     validated_items = session.scalars(
         select(DeliveryItem).where(
             DeliveryItem.product_id == product_id,
@@ -506,7 +533,7 @@ def compute_traceability(
     ).all() if delivery_ids_in_range else []
 
     seen_delivery_item_ids: set[uuid.UUID] = set()
-    for item in list(validated_items) + list(all_delivery_items):
+    for item in list(validated_items):
         if item.id in seen_delivery_item_ids:
             continue
         seen_delivery_item_ids.add(item.id)
@@ -524,18 +551,18 @@ def compute_traceability(
                 delivery_id=item.delivery_id,
                 delivery_order_id=None,
                 count_id=None,
-                # stash created_by for lookup
             )
         )
-        # Patch operator field after user lookup — store created_by for now.
-        # We'll do a post-pass below.
 
     # Store created_by keyed by event id for post-pass.
     delivery_item_created_by: dict[uuid.UUID, uuid.UUID] = {}
-    for item in list(validated_items) + list(all_delivery_items):
+    for item in list(validated_items):
         delivery_item_created_by[item.id] = item.created_by
 
     # --- delivery_order_items ---
+    # Only include items whose parent order is 'completed'.
+    # Items of pending orders must NOT appear in traceability — a pending order
+    # is a photo-only record with no confirmed consumption.
     completed_orders = session.scalars(
         select(DeliveryOrder).where(
             DeliveryOrder.status == "completed",
@@ -545,13 +572,6 @@ def compute_traceability(
     ).all()
     order_ids_in_range = {o.id for o in completed_orders}
 
-    all_order_items_in_range = session.scalars(
-        select(DeliveryOrderItem).where(
-            DeliveryOrderItem.product_id == product_id,
-            DeliveryOrderItem.created_at >= from_dt,
-            DeliveryOrderItem.created_at <= to_dt,
-        )
-    ).all()
     order_items_from_completed = session.scalars(
         select(DeliveryOrderItem).where(
             DeliveryOrderItem.product_id == product_id,
@@ -561,7 +581,7 @@ def compute_traceability(
 
     seen_order_item_ids: set[uuid.UUID] = set()
     order_item_created_by: dict[uuid.UUID, uuid.UUID] = {}
-    for item in list(order_items_from_completed) + list(all_order_items_in_range):
+    for item in list(order_items_from_completed):
         if item.id in seen_order_item_ids:
             continue
         seen_order_item_ids.add(item.id)
@@ -583,6 +603,8 @@ def compute_traceability(
         )
 
     # --- inventory_count_items ---
+    # Only include items whose parent count is 'completed'.
+    # Items of in-progress counts must NOT appear in traceability.
     completed_counts_in_range = session.scalars(
         select(InventoryCount).where(
             InventoryCount.status == "completed",
@@ -592,13 +614,6 @@ def compute_traceability(
     ).all()
     count_ids_in_range = {c.id for c in completed_counts_in_range}
 
-    all_count_items_in_range = session.scalars(
-        select(InventoryCountItem).where(
-            InventoryCountItem.product_id == product_id,
-            InventoryCountItem.created_at >= from_dt,
-            InventoryCountItem.created_at <= to_dt,
-        )
-    ).all()
     count_items_from_completed = session.scalars(
         select(InventoryCountItem).where(
             InventoryCountItem.product_id == product_id,
@@ -608,7 +623,7 @@ def compute_traceability(
 
     seen_count_item_ids: set[uuid.UUID] = set()
     count_item_created_by: dict[uuid.UUID, uuid.UUID] = {}
-    for item in list(count_items_from_completed) + list(all_count_items_in_range):
+    for item in list(count_items_from_completed):
         if item.id in seen_count_item_ids:
             continue
         seen_count_item_ids.add(item.id)

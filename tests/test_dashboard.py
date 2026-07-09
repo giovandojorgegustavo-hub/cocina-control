@@ -114,13 +114,15 @@ def _make_delivery_order(
     created_by: uuid.UUID,
     status: str = "completed",
     completed_at: datetime | None = None,
+    photo_at: datetime | None = None,
 ) -> DeliveryOrder:
     now = datetime.now(UTC)
+    resolved_photo_at = photo_at if photo_at is not None else now
     o = DeliveryOrder(
         id=uuid.uuid4(),
         status=status,
         photo_url="/photos/test.jpg",
-        photo_at=now,
+        photo_at=resolved_photo_at,
         photo_by=created_by,
         completed_at=completed_at or (now if status == "completed" else None),
         completed_by=created_by if status == "completed" else None,
@@ -966,3 +968,474 @@ async def test_export_csv_operator_returns_403(
         headers=_auth(operator_token),
     )
     assert resp.status_code == 403
+
+
+# ===========================================================================
+# NEW TESTS — QA/security fixes applied in this iteration
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# Fix 1: CSV injection sanitization
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_export_csv_sanitizes_formula_injection(
+    client: AsyncClient,
+    db_session: Session,
+    owner_token: str,
+    owner_user,
+    operator_user,
+):
+    """Fields starting with formula prefixes (=, +, -, @) must be prefixed with
+    a single quote so that Excel/LibreOffice treats them as plain text."""
+    # Create a product whose name starts with '=', a classic injection payload.
+    p = _make_product(db_session, owner_user.id, "=HACK()")
+    # Override the auto-uppercase in _make_product by patching directly.
+    # The model uppercases in the helper; set the name directly so we test the
+    # actual sanitization path.
+    p.name = "=HACK()"
+    db_session.flush()
+
+    now = datetime.now(UTC)
+    delivery = _make_delivery(db_session, owner_user.id, "validada", validated_at=now)
+    delivery.created_at = now
+    db_session.flush()
+    # Reason field also starts with '='.
+    _make_delivery_item(
+        db_session,
+        delivery.id,
+        p.id,
+        operator_user.id,
+        "5",
+        "5",
+        reason="=INJECTED()",
+        created_at=now,
+    )
+
+    today = _arg_today()
+    resp = await client.get(
+        f"{_BASE}/export?from={today}&to={today}",
+        headers=_auth(owner_token),
+    )
+    assert resp.status_code == 200
+    body = resp.content.decode("utf-8-sig")
+
+    # The sanitized form must appear: the field is prefixed with a single quote.
+    assert "'=HACK()" in body
+    assert "'=INJECTED()" in body
+
+    # Verify the raw unsanitized forms do NOT appear at a field boundary.
+    # A raw injection would appear after a comma (start of field) or at the
+    # very start of a CSV cell — both cases produce ",=".  The sanitized form
+    # produces ",'=", so checking for ",=" (or the BOM + "=" for first column)
+    # is sufficient.
+    assert ",=HACK()" not in body
+    assert ",=INJECTED()" not in body
+
+
+# ---------------------------------------------------------------------------
+# Fix 2: traceability excludes items from non-completed parents
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_traceability_excludes_items_from_pending_orders(
+    client: AsyncClient,
+    db_session: Session,
+    owner_token: str,
+    owner_user,
+    operator_user,
+):
+    """Items of a pending (photo-only) delivery order must NOT appear in
+    traceability — pending orders represent unconfirmed consumption."""
+    palta = _make_product(db_session, owner_user.id, "PALTA")
+
+    now = datetime.now(UTC)
+
+    # A completed order — its item SHOULD appear.
+    completed_order = _make_delivery_order(
+        db_session, operator_user.id, status="completed", completed_at=now
+    )
+    completed_order.created_at = now
+    db_session.flush()
+    completed_item = _make_delivery_order_item(
+        db_session, completed_order.id, palta.id, operator_user.id, "3", created_at=now
+    )
+
+    # A pending order — its item must NOT appear.
+    pending_order = _make_delivery_order(db_session, operator_user.id, status="pending")
+    pending_order.created_at = now
+    db_session.flush()
+    pending_item = _make_delivery_order_item(
+        db_session, pending_order.id, palta.id, operator_user.id, "7", created_at=now
+    )
+
+    today = _arg_today()
+    resp = await client.get(
+        f"{_BASE}/traceability/{palta.id}?from={today}&to={today}",
+        headers=_auth(owner_token),
+    )
+    assert resp.status_code == 200
+    event_ids = {e["id"] for e in resp.json()}
+    assert str(completed_item.id) in event_ids
+    assert str(pending_item.id) not in event_ids
+
+
+@pytest.mark.asyncio
+async def test_traceability_excludes_items_from_no_leida_deliveries(
+    client: AsyncClient,
+    db_session: Session,
+    owner_token: str,
+    owner_user,
+    operator_user,
+):
+    """Items of a non-validated delivery (no_leida) must NOT appear in
+    traceability — only items from deliveries in status 'validada' count."""
+    palta = _make_product(db_session, owner_user.id, "PALTA")
+
+    now = datetime.now(UTC)
+
+    # A validated delivery — its item SHOULD appear.
+    validated = _make_delivery(db_session, owner_user.id, "validada", validated_at=now)
+    validated.created_at = now
+    db_session.flush()
+    valid_item = _make_delivery_item(
+        db_session, validated.id, palta.id, operator_user.id, "10", "10", created_at=now
+    )
+
+    # An unread delivery — its item must NOT appear.
+    unread = _make_delivery(db_session, owner_user.id, "no_leida", validated_at=None)
+    unread.created_at = now
+    db_session.flush()
+    unread_item = _make_delivery_item(
+        db_session, unread.id, palta.id, operator_user.id, "20", None, created_at=now
+    )
+
+    today = _arg_today()
+    resp = await client.get(
+        f"{_BASE}/traceability/{palta.id}?from={today}&to={today}",
+        headers=_auth(owner_token),
+    )
+    assert resp.status_code == 200
+    event_ids = {e["id"] for e in resp.json()}
+    assert str(valid_item.id) in event_ids
+    assert str(unread_item.id) not in event_ids
+
+
+# ---------------------------------------------------------------------------
+# Fix 3: orders_summary uses completed_at / photo_at, not created_at
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_orders_summary_uses_completion_dates(
+    client: AsyncClient,
+    db_session: Session,
+    owner_token: str,
+    owner_user,
+    operator_user,
+):
+    """completed_count must count orders whose completed_at is in range.
+    photo_only_count must count pending orders whose photo_at is in range.
+    Orders whose created_at is in range but whose event timestamp is outside
+    the range must NOT be counted.
+    """
+    now = datetime.now(UTC)
+    yesterday_utc = now - timedelta(days=1)
+
+    # Order created yesterday but completed today → must appear in today's completed_count.
+    o1 = _make_delivery_order(
+        db_session, operator_user.id, status="completed", completed_at=now
+    )
+    o1.created_at = yesterday_utc
+    db_session.flush()
+
+    # Order created AND completed yesterday → must NOT appear in today's completed_count.
+    o2 = _make_delivery_order(
+        db_session, operator_user.id, status="completed", completed_at=yesterday_utc
+    )
+    o2.created_at = yesterday_utc
+    db_session.flush()
+
+    # Pending order with photo taken today → must appear in today's photo_only_count.
+    o3 = _make_delivery_order(
+        db_session, operator_user.id, status="pending", photo_at=now
+    )
+    o3.created_at = yesterday_utc
+    db_session.flush()
+
+    # Pending order with photo taken yesterday → must NOT appear in today's photo_only_count.
+    o4 = _make_delivery_order(
+        db_session, operator_user.id, status="pending", photo_at=yesterday_utc
+    )
+    o4.created_at = yesterday_utc
+    db_session.flush()
+
+    today = _arg_today()
+    resp = await client.get(
+        f"{_BASE}/summary?from={today}&to={today}",
+        headers=_auth(owner_token),
+    )
+    assert resp.status_code == 200
+    summary = resp.json()["orders_summary"]
+    assert summary["completed_count"] == 1   # only o1
+    assert summary["photo_only_count"] == 1  # only o3
+
+
+# ---------------------------------------------------------------------------
+# Fix 4: invalid type returns 400
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_export_invalid_type_returns_400(
+    client: AsyncClient,
+    owner_token: str,
+):
+    """An invalid 'type' query param must return HTTP 400, not silently default to 'all'."""
+    today = _arg_today()
+    resp = await client.get(
+        f"{_BASE}/export?from={today}&to={today}&type=invalid_value",
+        headers=_auth(owner_token),
+    )
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "invalid_value" in detail.lower() or "type" in detail.lower()
+
+
+# ---------------------------------------------------------------------------
+# Fix 5: announced_qty column in CSV for delivery_items
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_export_csv_includes_announced_qty_for_delivery_items(
+    client: AsyncClient,
+    db_session: Session,
+    owner_token: str,
+    owner_user,
+    operator_user,
+):
+    """The CSV must have an 'announced_qty' column.  For delivery_item rows it
+    must contain the announced quantity; for other event types it must be empty."""
+    palta = _make_product(db_session, owner_user.id, "PALTA")
+
+    now = datetime.now(UTC)
+
+    # Delivery item: announced=12, received=10.
+    delivery = _make_delivery(db_session, owner_user.id, "validada", validated_at=now)
+    delivery.created_at = now
+    db_session.flush()
+    _make_delivery_item(
+        db_session, delivery.id, palta.id, operator_user.id,
+        announced_qty="12", received_qty="10", created_at=now
+    )
+
+    # Count item (announced_qty must be empty in its row).
+    count = _make_count(db_session, operator_user.id, completed_at=now)
+    count.started_at = now
+    count.created_at = now
+    db_session.flush()
+    _make_count_item(db_session, count.id, palta.id, operator_user.id, "8", created_at=now)
+
+    today = _arg_today()
+    resp = await client.get(
+        f"{_BASE}/export?from={today}&to={today}",
+        headers=_auth(owner_token),
+    )
+    assert resp.status_code == 200
+    body = resp.content.decode("utf-8-sig")
+    lines = body.splitlines()
+
+    # Header must contain announced_qty column.
+    header = lines[0]
+    assert "announced_qty" in header
+
+    # Parse header to find column positions.
+    cols = header.split(",")
+    announced_idx = cols.index("announced_qty")
+    event_type_idx = cols.index("event_type")
+
+    delivery_rows = [
+        line.split(",") for line in lines[1:]
+        if line and line.split(",")[event_type_idx] == "delivery_item"
+    ]
+    count_rows = [
+        line.split(",") for line in lines[1:]
+        if line and line.split(",")[event_type_idx] == "inventory_count_item"
+    ]
+
+    assert len(delivery_rows) >= 1
+    # announced_qty for the delivery row must be "12".
+    assert delivery_rows[0][announced_idx] == "12"
+
+    assert len(count_rows) >= 1
+    # announced_qty for count rows must be empty.
+    assert count_rows[0][announced_idx] == ""
+
+
+# ---------------------------------------------------------------------------
+# Fix 7: orders_summary excludes cancelled (corrected) pending orders
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_orders_summary_excludes_cancelled(
+    client: AsyncClient,
+    db_session: Session,
+    owner_token: str,
+    owner_user,
+    operator_user,
+):
+    """A pending order that has been 'cancelled' (corrected by another order) must
+    not appear in photo_only_count.  In this model, a corrector row pointing to a
+    pending order makes that original a non-leaf — the leaf filter must exclude it."""
+    now = datetime.now(UTC)
+
+    # Original pending order.
+    original = _make_delivery_order(db_session, operator_user.id, status="pending", photo_at=now)
+    original.created_at = now
+    db_session.flush()
+
+    # Corrector order (the "cancellation"): a pending order with corrects_id pointing
+    # to the original.  Its existence makes the original a non-leaf.
+    canceller = DeliveryOrder(
+        id=uuid.uuid4(),
+        status="pending",
+        photo_url="/photos/cancel.jpg",
+        photo_at=now,
+        photo_by=operator_user.id,
+        completed_at=None,
+        completed_by=None,
+        created_by=operator_user.id,
+        created_at=now,
+        corrects_id=original.id,
+    )
+    db_session.add(canceller)
+    db_session.flush()
+
+    today = _arg_today()
+    resp = await client.get(
+        f"{_BASE}/summary?from={today}&to={today}",
+        headers=_auth(owner_token),
+    )
+    assert resp.status_code == 200
+    summary = resp.json()["orders_summary"]
+    # 'original' is a non-leaf (corrected) → excluded.
+    # 'canceller' is a leaf with status=pending → counted.
+    assert summary["photo_only_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Fix 8a: full-day boundary coverage
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.timing
+async def test_from_equals_to_covers_full_day(
+    client: AsyncClient,
+    db_session: Session,
+    owner_token: str,
+    owner_user,
+    operator_user,
+):
+    """Events at 00:00:01 and 23:59:59 Argentina time on the same day must both
+    appear when from==to is that day.
+
+    Marked with pytest.mark.timing so it can be excluded from fast runs.
+    """
+    from datetime import time, timezone
+    _TZ_ARG_LOCAL = timezone(timedelta(hours=-3))
+
+    today_arg = datetime.now(_TZ_ARG_LOCAL).date()
+    start_of_day = datetime.combine(today_arg, time(0, 0, 1), tzinfo=_TZ_ARG_LOCAL)
+    end_of_day = datetime.combine(today_arg, time(23, 59, 59), tzinfo=_TZ_ARG_LOCAL)
+
+    palta = _make_product(db_session, owner_user.id, "PALTA")
+
+    # Event at 00:00:01 Argentina.
+    d1 = _make_delivery(db_session, owner_user.id, "validada", validated_at=start_of_day)
+    d1.created_at = start_of_day
+    db_session.flush()
+    item1 = _make_delivery_item(
+        db_session, d1.id, palta.id, operator_user.id, "5", "5", created_at=start_of_day
+    )
+
+    # Event at 23:59:59 Argentina.
+    d2 = _make_delivery(db_session, owner_user.id, "validada", validated_at=end_of_day)
+    d2.created_at = end_of_day
+    db_session.flush()
+    item2 = _make_delivery_item(
+        db_session, d2.id, palta.id, operator_user.id, "3", "3", created_at=end_of_day
+    )
+
+    date_str = today_arg.strftime("%Y-%m-%d")
+    resp = await client.get(
+        f"{_BASE}/traceability/{palta.id}?from={date_str}&to={date_str}",
+        headers=_auth(owner_token),
+    )
+    assert resp.status_code == 200
+    event_ids = {e["id"] for e in resp.json()}
+    assert str(item1.id) in event_ids, "Event at 00:00:01 must be included"
+    assert str(item2.id) in event_ids, "Event at 23:59:59 must be included"
+
+
+# ---------------------------------------------------------------------------
+# Fix 8b: alert=False when consumption is zero (no variance)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_alert_false_when_consumption_zero(
+    client: AsyncClient,
+    db_session: Session,
+    owner_token: str,
+    owner_user,
+    operator_user,
+):
+    """When stock_inicio + entries_qty == stock_actual, consumption==0 and
+    alert must be False (numbers add up perfectly, no leak detected)."""
+    palta = _make_product(db_session, owner_user.id, "PALTA")
+
+    # Count before range: stock_inicio = 10.
+    ten_days_ago = datetime.now(UTC) - timedelta(days=10)
+    prior_count = _make_count(db_session, operator_user.id, completed_at=ten_days_ago)
+    prior_count.started_at = ten_days_ago
+    prior_count.created_at = ten_days_ago
+    db_session.flush()
+    _make_count_item(
+        db_session, prior_count.id, palta.id, operator_user.id, "10", created_at=ten_days_ago
+    )
+
+    # Delivery in range: entries = 5.
+    in_range_ts = datetime.now(UTC) - timedelta(minutes=30)
+    delivery = _make_delivery(db_session, owner_user.id, "validada", validated_at=in_range_ts)
+    delivery.created_at = in_range_ts
+    db_session.flush()
+    _make_delivery_item(
+        db_session, delivery.id, palta.id, owner_user.id, "5", "5", created_at=in_range_ts
+    )
+
+    # Count in range: stock_actual = 15 (10 + 5 = 15, no variance).
+    count_in_range = _make_count(db_session, operator_user.id, completed_at=in_range_ts)
+    count_in_range.started_at = in_range_ts
+    count_in_range.created_at = in_range_ts
+    db_session.flush()
+    _make_count_item(
+        db_session, count_in_range.id, palta.id, operator_user.id, "15", created_at=in_range_ts
+    )
+
+    today = _arg_today()
+    resp = await client.get(
+        f"{_BASE}/summary?from={today}&to={today}",
+        headers=_auth(owner_token),
+    )
+    assert resp.status_code == 200
+    products = {p["name"]: p for p in resp.json()["products"]}
+    palta_row = products["PALTA"]
+
+    assert palta_row["consumption"] == "0"
+    assert palta_row["alert"] is False

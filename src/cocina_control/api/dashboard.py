@@ -38,7 +38,7 @@ from cocina_control.models.product import Product
 from cocina_control.models.user import User
 from cocina_control.schemas.dashboard import DashboardSummaryResponse, TraceabilityEvent
 from cocina_control.services.dashboard import compute_summary, compute_traceability
-from cocina_control.services.export import generate_csv
+from cocina_control.services.export import _VALID_TYPES, generate_csv
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -175,6 +175,12 @@ def export_csv(
         raise HTTPException(
             status_code=400,
             detail="'from' date must be on or before 'to' date",
+        )
+
+    if type not in _VALID_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid 'type' value '{type}'. Valid values: {sorted(_VALID_TYPES)}",
         )
 
     from_dt, to_dt = _range_to_utc(from_date, to_date)

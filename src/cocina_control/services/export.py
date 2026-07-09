@@ -6,7 +6,14 @@ without loading all events into memory at once.
 
 CSV columns:
   event_type, event_id, date, operator_name, product_id, product_name,
-  qty, delivery_id, delivery_order_id, count_id, corrects_id, reason
+  qty, announced_qty, delivery_id, delivery_order_id, count_id, corrects_id, reason
+
+  For delivery_item rows:
+    qty           = received_qty (or announced_qty fallback)
+    announced_qty = the originally announced quantity
+  For all other event types:
+    qty           = the event quantity
+    announced_qty = empty
 
 Content-Type : text/csv; charset=utf-8
 BOM          : \\xef\\xbb\\xbf  (Excel requires BOM to detect UTF-8 correctly)
@@ -20,6 +27,11 @@ Type filter (query param `type`):
   delivery — delivery_items only
   order    — delivery_order_items only
   count    — inventory_count_items only
+
+Security:
+  Text-free fields (product_name, operator_name, reason) are sanitized against
+  CSV formula injection (fields starting with =, +, -, @, \\t, \\r are prefixed
+  with a single quote so that spreadsheet applications treat them as text).
 """
 
 import csv
@@ -45,6 +57,7 @@ _CSV_COLUMNS = [
     "product_id",
     "product_name",
     "qty",
+    "announced_qty",
     "delivery_id",
     "delivery_order_id",
     "count_id",
@@ -54,12 +67,32 @@ _CSV_COLUMNS = [
 
 _VALID_TYPES = {"all", "delivery", "order", "count"}
 
+# Characters that cause spreadsheet applications (Excel, LibreOffice) to
+# interpret cell content as a formula.  Fields starting with any of these are
+# prefixed with a single quote to force plain-text treatment.
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
 
 def _str(v: object) -> str:
     """Convert value to string, '' for None."""
     if v is None:
         return ""
     return str(v)
+
+
+def _sanitize_csv_field(value: str | None) -> str:
+    """Neutralize CSV formula-injection payloads.
+
+    Any text-free field whose first character could trigger formula evaluation
+    in a spreadsheet is prefixed with a single quote.  The quote is rendered
+    inside the CSV cell and is visible in the raw file, which is the standard
+    safe-export convention (OWASP CSV Injection).
+    """
+    if not value:
+        return ""
+    if value[0] in _FORMULA_PREFIXES:
+        return "'" + value
+    return value
 
 
 def _collect_rows(
@@ -125,15 +158,16 @@ def _collect_rows(
                 "event_type": "delivery_item",
                 "event_id": _str(item.id),
                 "date": _str(item.created_at),
-                "operator_name": operator_name(item.created_by),
+                "operator_name": _sanitize_csv_field(operator_name(item.created_by)),
                 "product_id": _str(item.product_id),
-                "product_name": product_name(item.product_id),
+                "product_name": _sanitize_csv_field(product_name(item.product_id)),
                 "qty": _str(qty),
+                "announced_qty": _str(item.announced_qty),
                 "delivery_id": _str(item.delivery_id),
                 "delivery_order_id": "",
                 "count_id": "",
                 "corrects_id": _str(item.corrects_id),
-                "reason": _str(item.reason),
+                "reason": _sanitize_csv_field(_str(item.reason)),
             })
 
     # ---- delivery_order_items ----
@@ -172,10 +206,11 @@ def _collect_rows(
                 "event_type": "delivery_order_item",
                 "event_id": _str(item.id),
                 "date": _str(item.created_at),
-                "operator_name": operator_name(item.created_by),
+                "operator_name": _sanitize_csv_field(operator_name(item.created_by)),
                 "product_id": _str(item.product_id),
-                "product_name": product_name(item.product_id),
+                "product_name": _sanitize_csv_field(product_name(item.product_id)),
                 "qty": _str(item.quantity),
+                "announced_qty": "",
                 "delivery_id": "",
                 "delivery_order_id": _str(item.delivery_order_id),
                 "count_id": "",
@@ -219,15 +254,16 @@ def _collect_rows(
                 "event_type": "inventory_count_item",
                 "event_id": _str(item.id),
                 "date": _str(item.created_at),
-                "operator_name": operator_name(item.created_by),
+                "operator_name": _sanitize_csv_field(operator_name(item.created_by)),
                 "product_id": _str(item.product_id),
-                "product_name": product_name(item.product_id),
+                "product_name": _sanitize_csv_field(product_name(item.product_id)),
                 "qty": _str(item.quantity),
+                "announced_qty": "",
                 "delivery_id": "",
                 "delivery_order_id": "",
                 "count_id": _str(item.inventory_count_id),
                 "corrects_id": _str(item.corrects_id),
-                "reason": _str(item.reason),
+                "reason": _sanitize_csv_field(_str(item.reason)),
             })
 
     # Sort all rows by date ascending.
@@ -251,7 +287,10 @@ def generate_csv(
     the response starts.  For v0.1 volumes (< 10k rows) this is fine.
     """
     if event_type_filter not in _VALID_TYPES:
-        event_type_filter = "all"
+        raise ValueError(
+            f"Invalid export type '{event_type_filter}'. "
+            f"Valid values: {sorted(_VALID_TYPES)}"
+        )
 
     rows = _collect_rows(session, from_dt, to_dt, event_type_filter)
 
