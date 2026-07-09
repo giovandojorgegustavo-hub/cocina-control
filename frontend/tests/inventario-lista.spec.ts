@@ -426,3 +426,86 @@ test('test_lista_no_products_shows_empty_state', async ({ page }) => {
   await expect(page.getByTestId('empty-catalogue')).toBeVisible()
   await expect(page.getByText(/pedile al dueño/i)).toBeVisible()
 })
+
+// ---------------------------------------------------------------------------
+// test_bootstrap_with_completed_count_starts_new_unless_correction_mode (QA H-07)
+// If the saved countId points to a completed count AND the operator is NOT in
+// correction mode, the bootstrap must discard it and POST a new count.
+// In correction mode, the completed count is used as-is.
+// ---------------------------------------------------------------------------
+
+test('test_bootstrap_with_completed_count_starts_new_unless_correction_mode', async ({ page }) => {
+  await injectOperatorToken(page)
+
+  let postCalled = false
+
+  // Pre-seed with a completed count id
+  await page.evaluate(
+    ([key, id]) => localStorage.setItem(key, id),
+    [LS_KEY, COUNT_ID],
+  )
+
+  await page.route(COUNTS_URL, (route) => {
+    if (route.request().method() === 'POST') {
+      postCalled = true
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ id: 'new-count', status: 'in_progress', started_at: '2026-07-09T14:00:00Z' }),
+      })
+    } else {
+      route.continue()
+    }
+  })
+
+  await page.route(COUNT_URL, (route) => {
+    const url = route.request().url()
+    if (url.includes('/complete')) return route.continue()
+
+    // Return the completed count for the first GET
+    if (url.includes(COUNT_ID)) {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: COUNT_ID,
+          status: 'completed',
+          started_at: '2026-07-09T12:00:00Z',
+          items: [{ id: 'item-1', product_id: 'prod-palta', quantity: 3 }],
+        }),
+      })
+    } else {
+      // New count after bootstrap
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: 'new-count',
+          status: 'in_progress',
+          started_at: '2026-07-09T14:00:00Z',
+          items: [],
+        }),
+      })
+    }
+  })
+
+  await page.route(PRODUCTS_URL, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(MOCK_PRODUCTS),
+    })
+  })
+
+  // Navigate fresh (no correctionMode state)
+  await page.goto('/inventario')
+
+  await expect(page.getByText('PALTA')).toBeVisible()
+
+  // A new count must have been started
+  expect(postCalled).toBe(true)
+
+  // The stale completed count must have been cleared
+  const storedId = await page.evaluate((key: string) => localStorage.getItem(key), LS_KEY)
+  expect(storedId).toBe('new-count')
+})

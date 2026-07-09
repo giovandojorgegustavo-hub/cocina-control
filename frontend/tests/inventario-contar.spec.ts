@@ -327,3 +327,65 @@ test('test_error_toast_keeps_typed_value', async ({ page }) => {
   // Typed value must NOT be cleared
   await expect(input).toHaveValue('7')
 })
+
+// ---------------------------------------------------------------------------
+// test_double_tap_siguiente_fires_single_request (paranoia)
+// Double-tapping SIGUIENTE must only POST /items once.
+// ---------------------------------------------------------------------------
+
+test('test_double_tap_siguiente_fires_single_request', async ({ page }) => {
+  await injectOperatorToken(page)
+  await seedCount(page)
+
+  let postCalls = 0
+
+  await page.route(ITEMS_URL, (route) => {
+    if (route.request().method() === 'POST') {
+      postCalls++
+      // Slow down first response to give room for a potential double-tap race
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ item_id: 'item-new', product_id: 'prod-palta', quantity: 3 }),
+      })
+    } else {
+      route.continue()
+    }
+  })
+
+  await page.route(COUNT_URL, (route) => {
+    const url = route.request().url()
+    if (url.match(/\/items$/) && route.request().method() === 'POST') return route.continue()
+    if (url.includes('/complete')) return route.continue()
+    if (url.match(/\/items\/[^/]+\/correct$/)) return route.continue()
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(makeCount()),
+    })
+  })
+
+  await page.route(PRODUCTS_URL, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(MOCK_PRODUCTS),
+    })
+  })
+
+  await page.goto('/inventario/contar/prod-palta')
+
+  const input = page.getByTestId('qty-input')
+  await input.fill('3')
+
+  const btnSiguiente = page.getByTestId('btn-siguiente')
+  await expect(btnSiguiente).toBeEnabled()
+
+  // Double-tap
+  await btnSiguiente.click()
+  await btnSiguiente.click()
+
+  await page.waitForTimeout(500)
+
+  expect(postCalls).toBe(1)
+})

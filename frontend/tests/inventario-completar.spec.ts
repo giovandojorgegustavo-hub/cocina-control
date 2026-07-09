@@ -140,22 +140,30 @@ test('test_terminar_success_shows_no_totals', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// test_terminar_clears_localStorage_id
-// After successful complete, the count id must be removed from localStorage.
+// test_terminar_countId_cleared_on_listo (QA H-02)
+// countId must be cleared when the operator taps "listo", NOT on complete.
 // ---------------------------------------------------------------------------
 
-test('test_terminar_clears_localStorage_id', async ({ page }) => {
+test('test_terminar_countId_cleared_on_listo', async ({ page }) => {
   await setupAndComplete(page)
 
   await expect(page.getByTestId('checkmark')).toBeVisible()
 
-  const storedId = await page.evaluate((key) => localStorage.getItem(key), LS_KEY)
-  expect(storedId).toBeNull()
+  // At this point countId must still be in localStorage (not cleared on complete)
+  const storedBefore = await page.evaluate((key: string) => localStorage.getItem(key), LS_KEY)
+  expect(storedBefore).toBe(COUNT_ID)
+
+  // Tap "listo" — this is where countId gets cleared
+  await page.getByTestId('btn-listo').click()
+
+  const storedAfter = await page.evaluate((key: string) => localStorage.getItem(key), LS_KEY)
+  expect(storedAfter).toBeNull()
 })
 
 // ---------------------------------------------------------------------------
-// test_terminar_button_corregir_returns_to_list_in_correction_mode
-// "corregir un producto" button navigates back to /inventario.
+// test_terminar_button_corregir_returns_to_list_in_correction_mode (QA H-02)
+// "corregir un producto" button navigates back to /inventario WITH correctionMode state.
+// The countId must still be in localStorage when it leaves.
 // ---------------------------------------------------------------------------
 
 test('test_terminar_button_corregir_returns_to_list_in_correction_mode', async ({ page }) => {
@@ -163,8 +171,8 @@ test('test_terminar_button_corregir_returns_to_list_in_correction_mode', async (
 
   await expect(page.getByTestId('checkmark')).toBeVisible()
 
-  // Intercept the navigation from /inventario (it will try to POST a new count)
-  // We don't need it to succeed — just verify the URL changes
+  // Intercept the navigation from /inventario — it will detect correctionMode
+  // and use the existing completed count (no new POST needed)
   await page.route(COUNTS_URL, (route) => {
     if (route.request().method() === 'POST') {
       route.fulfill({
@@ -180,4 +188,141 @@ test('test_terminar_button_corregir_returns_to_list_in_correction_mode', async (
   await page.getByTestId('btn-corregir').click()
 
   await expect(page).toHaveURL('/inventario')
+
+  // countId must still be in localStorage — not cleared yet
+  const storedId = await page.evaluate((key: string) => localStorage.getItem(key), LS_KEY)
+  expect(storedId).toBe(COUNT_ID)
+})
+
+// ---------------------------------------------------------------------------
+// test_completado_direct_access_without_state_redirects (QA H-09)
+// If the operator navigates directly to /inventario/completado without location.state,
+// they must be redirected to /inventario.
+// ---------------------------------------------------------------------------
+
+test('test_completado_direct_access_without_state_redirects', async ({ page }) => {
+  await injectOperatorToken(page)
+  await seedCount(page)
+
+  const COMPLETE_URL_NEW = '**/api/v1/inventory-counts'
+  await page.route(COMPLETE_URL_NEW, (route) => {
+    if (route.request().method() === 'POST') {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ id: 'new-count', status: 'in_progress', started_at: '2026-07-09T12:00:00Z' }),
+      })
+    } else {
+      route.continue()
+    }
+  })
+
+  await page.route(COUNT_URL, (route) => {
+    const url = route.request().url()
+    if (url.endsWith('/complete')) return route.continue()
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: COUNT_ID,
+        status: 'in_progress',
+        started_at: '2026-07-09T12:00:00Z',
+        items: [],
+      }),
+    })
+  })
+
+  await page.route(PRODUCTS_URL, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(MOCK_PRODUCTS),
+    })
+  })
+
+  // Navigate directly to completado without going through the complete flow
+  await page.goto('/inventario/completado')
+
+  // Must redirect to /inventario
+  await expect(page).toHaveURL('/inventario')
+})
+
+// ---------------------------------------------------------------------------
+// test_double_tap_terminar_fires_single_request (paranoia)
+// Double-tapping "terminar conteo" must only POST /complete once.
+// We use a slow route to hold the in-flight request and verify the second tap
+// is ignored by the isPending guard.
+// ---------------------------------------------------------------------------
+
+test('test_double_tap_terminar_fires_single_request', async ({ page }) => {
+  await injectOperatorToken(page)
+  await seedCount(page)
+
+  let completeCalls = 0
+
+  // Use a deferred fulfillment so the button stays visible for the second click
+  let resolveComplete: (() => void) | null = null
+  const completeHeld = new Promise<void>((resolve) => { resolveComplete = resolve })
+
+  await page.route(COMPLETE_URL, async (route) => {
+    completeCalls++
+    await completeHeld
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: COUNT_ID, status: 'completed', completed_at: '2026-07-09T13:00:00Z' }),
+    })
+  })
+
+  await page.route(COUNT_URL, (route) => {
+    const url = route.request().url()
+    if (url.endsWith('/complete')) return route.continue()
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(makeFullCount()),
+    })
+  })
+
+  await page.route(COUNTS_URL, (route) => {
+    if (route.request().method() === 'POST') {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ id: COUNT_ID, status: 'in_progress', started_at: '2026-07-09T12:00:00Z' }),
+      })
+    } else {
+      route.continue()
+    }
+  })
+
+  await page.route(PRODUCTS_URL, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(MOCK_PRODUCTS),
+    })
+  })
+
+  await page.goto('/inventario')
+
+  const btn = page.getByTestId('terminar-conteo')
+  await expect(btn).toBeEnabled()
+
+  // First tap — starts the in-flight request
+  await btn.click()
+
+  // Small wait so the mutation fires and isPending becomes true
+  await page.waitForTimeout(50)
+
+  // Second tap — button is disabled while in-flight, click should be ignored
+  await btn.click({ force: true })
+
+  await page.waitForTimeout(50)
+
+  // Only 1 call should have been made even though we clicked twice
+  expect(completeCalls).toBe(1)
+
+  // Release the held response
+  resolveComplete!()
 })

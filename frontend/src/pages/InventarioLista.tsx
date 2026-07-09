@@ -5,7 +5,7 @@
  * Never shows expected values, previous stock, or averages (Principio #1).
  */
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { apiClient } from '../lib/api'
 import { useProducts } from '../lib/products'
@@ -19,6 +19,14 @@ import {
 import { useAuthWithGetters } from '../lib/auth'
 import { formatDayMonth } from '../lib/date'
 import type { InventoryCount, InventoryCountItem, Product } from '../lib/types'
+
+// ---------------------------------------------------------------------------
+// Location state from /inventario/completado when the operator taps "corregir"
+// ---------------------------------------------------------------------------
+
+interface IncomingLocationState {
+  correctionMode?: boolean
+}
 
 // ---------------------------------------------------------------------------
 // Skeleton
@@ -94,6 +102,9 @@ function CountedRow({ product, item, onChange }: CountedRowProps) {
         <span className="font-bold text-sm uppercase tracking-wide text-gray-400">
           {product.name}
         </span>
+        {/* El wireframe expone la cantidad recién contada como excepción documentada al
+            Principio #1: es el dato propio del operator en esta sesión, no análisis del
+            sistema. Ver docs/ux/registro-inventario.md §Pantalla 1. */}
         <span className="ml-2 text-sm text-gray-400">
           contado {item.quantity} {product.unit}
         </span>
@@ -116,7 +127,15 @@ function CountedRow({ product, item, onChange }: CountedRowProps) {
 
 export function InventarioLista() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { userId } = useAuthWithGetters()
+
+  // QA H-02: when the operator taps "corregir un producto" from the completado screen,
+  // they arrive here with correctionMode=true in location.state.
+  // In this mode the count (status: completed) is shown as read-only — no "terminar" button,
+  // no new counting; only the "cambiar" button per row is available.
+  const incomingState = location.state as IncomingLocationState | null
+  const correctionMode = incomingState?.correctionMode === true
 
   // countId in state — drives the count query below
   const [countId, setCountId] = useState<string | null>(null)
@@ -128,6 +147,9 @@ export function InventarioLista() {
 
   // Prevents double-start in StrictMode / concurrent renders
   const bootstrapStarted = useRef(false)
+
+  // Guard against double-tap on "terminar conteo" before isPending updates
+  const completeInFlight = useRef(false)
 
   // Inline query instead of useInventoryCount so we can detect 404 explicitly
   const {
@@ -178,7 +200,8 @@ export function InventarioLista() {
     const saved = getSavedCountId(userId)
 
     if (saved) {
-      // Try to resume — if the server returns 404, Phase 2 handles it
+      // Try to resume — if the server returns 404 or the count is completed (and we are NOT
+      // in correction mode), Phase 2 handles it.
       setCountId(saved)
       setBootstrapState('done')
     } else {
@@ -194,7 +217,7 @@ export function InventarioLista() {
     }
   }, [userId])
 
-  // Phase 2 — saved count is gone (404) → clear and POST new
+  // Phase 2a — saved count is gone (404) → clear and POST new
   useEffect(() => {
     if (!userId || !countQueryError) return
 
@@ -218,6 +241,32 @@ export function InventarioLista() {
         setBootstrapState('error')
       })
   }, [userId, countQueryError])
+
+  // Phase 2b — QA H-07: saved count loaded successfully but is already completed.
+  // If we are NOT in correctionMode (operator arrived fresh from home), discard it
+  // and start a new count. In correctionMode the completed count is shown read-only.
+  useEffect(() => {
+    if (!userId || !count) return
+    if (count.status !== 'completed') return
+    if (correctionMode) return // stay in correction mode — do not start a new count
+
+    // The count is done and the operator is not here to correct — start fresh
+    clearSavedCountId(userId)
+    setCountId(null)
+    setBootstrapState('loading')
+    bootstrapStarted.current = true
+
+    startInventoryCount()
+      .then((resp) => {
+        saveCountId(userId, resp.id)
+        setCountId(resp.id)
+        setBootstrapState('done')
+      })
+      .catch(() => {
+        setBootstrapState('error')
+      })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, count?.status, correctionMode])
 
   // ---------------------------------------------------------------------------
   // Derived data
@@ -273,15 +322,20 @@ export function InventarioLista() {
   const handleComplete = useCallback(() => {
     if (!countId || !userId) return
     if (completeMutation.isPending) return
+    if (completeInFlight.current) return
+    completeInFlight.current = true
 
     completeMutation.mutate(countId, {
       onSuccess: () => {
-        clearSavedCountId(userId)
+        // QA H-02: do NOT clear countId here. Pass it to the completado screen via state.
+        // The countId is cleared when the operator taps "listo" (or the 1.5s timer fires).
+        // This allows "corregir un producto" to re-enter /inventario with the same countId.
         navigate('/inventario/completado', {
-          state: { productCount: totalCount },
+          state: { productCount: totalCount, completedCountId: countId },
         })
       },
       onError: () => {
+        completeInFlight.current = false
         setToast({ visible: true, message: 'No se pudo terminar el conteo. Intentá de nuevo.' })
       },
     })
@@ -427,9 +481,9 @@ export function InventarioLista() {
         </h1>
       </header>
 
-      <main className="flex-1 overflow-y-auto pb-24">
-        {/* Pending products */}
-        {pendingProducts.map((product, idx) => (
+      <main className={['flex-1 overflow-y-auto', correctionMode ? 'pb-4' : 'pb-24'].join(' ')}>
+        {/* In correction mode: no pending rows (they can only change already-counted items) */}
+        {!correctionMode && pendingProducts.map((product, idx) => (
           <PendingRow
             key={product.id}
             product={product}
@@ -438,7 +492,7 @@ export function InventarioLista() {
           />
         ))}
 
-        {/* Counted products */}
+        {/* Counted products — always shown; "cambiar" available in both modes */}
         {countedProducts.map((product) => (
           <CountedRow
             key={product.id}
@@ -449,25 +503,27 @@ export function InventarioLista() {
         ))}
       </main>
 
-      {/* Sticky footer */}
-      <footer className="fixed bottom-0 left-0 right-0 border-t border-gray-200 bg-white px-4 py-3">
-        <button
-          data-testid="terminar-conteo"
-          onClick={handleComplete}
-          disabled={!allCounted || completeMutation.isPending}
-          className={[
-            'w-full min-h-[56px] font-bold text-base uppercase tracking-wide',
-            allCounted && !completeMutation.isPending
-              ? 'bg-gray-900 text-white active:opacity-70'
-              : 'bg-gray-200 text-gray-400 cursor-not-allowed',
-          ].join(' ')}
-          aria-label={`Terminar conteo ${doneCount} de ${totalCount}`}
-        >
-          {completeMutation.isPending
-            ? 'cerrando...'
-            : `terminar conteo (${doneCount}/${totalCount})`}
-        </button>
-      </footer>
+      {/* Sticky footer — hidden in correction mode (QA H-02) */}
+      {!correctionMode && (
+        <footer className="fixed bottom-0 left-0 right-0 border-t border-gray-200 bg-white px-4 py-3">
+          <button
+            data-testid="terminar-conteo"
+            onClick={handleComplete}
+            disabled={!allCounted || completeMutation.isPending}
+            className={[
+              'w-full min-h-[56px] font-bold text-base uppercase tracking-wide',
+              allCounted && !completeMutation.isPending
+                ? 'bg-gray-900 text-white active:opacity-70'
+                : 'bg-gray-200 text-gray-400 cursor-not-allowed',
+            ].join(' ')}
+            aria-label={`Terminar conteo ${doneCount} de ${totalCount}`}
+          >
+            {completeMutation.isPending
+              ? 'cerrando...'
+              : `terminar conteo (${doneCount}/${totalCount})`}
+          </button>
+        </footer>
+      )}
 
       {/* Toast */}
       {toast.visible && (

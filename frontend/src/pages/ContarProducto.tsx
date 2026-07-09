@@ -10,7 +10,8 @@
  * previous value — that is the fact being corrected, not an analysis.
  */
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams, Navigate } from 'react-router-dom'
+import axios from 'axios'
 import { useProducts } from '../lib/products'
 import {
   getSavedCountId,
@@ -59,16 +60,15 @@ export function ContarProducto() {
     (i) => i.id === itemId,
   )
 
-  // Input state
+  // Input state — always starts EMPTY.
+  // In correction mode the previous value is shown ONLY in the banner (below), never pre-loaded
+  // into the input. The operator must type the new value from scratch. (QA H-01)
   const [value, setValue] = useState<string>('')
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // Pre-load input with current value when correcting
-  useEffect(() => {
-    if (isCorrection && previousItem !== undefined) {
-      setValue(String(previousItem.quantity))
-    }
-  }, [isCorrection, previousItem])
+  // Guard against double-tap: a ref prevents a second save from firing before React has
+  // updated isPending (which only updates on the next render cycle).
+  const saveInFlight = useRef(false)
 
   // Auto-focus on mount
   useEffect(() => {
@@ -121,9 +121,21 @@ export function ContarProducto() {
       afterSave: (savedProductId: string) => void,
     ) => {
       if (!countId || !productId) return
+      if (saveInFlight.current) return
+      saveInFlight.current = true
 
-      const onError = () => {
-        setToast({ visible: true, message: 'No se pudo guardar. Intentá de nuevo.' })
+      const onError = (err: unknown) => {
+        saveInFlight.current = false
+        // QA H-04: differentiate 403 (correction window expired) from other errors
+        const status = axios.isAxiosError(err) ? err.response?.status : null
+        if (status === 403) {
+          setToast({
+            visible: true,
+            message: 'El plazo para corregir este conteo venció. Pedile al dueño que lo corrija.',
+          })
+        } else {
+          setToast({ visible: true, message: 'No se pudo guardar. Intentá de nuevo.' })
+        }
         // Value is kept in input — principio de no perder lo tipeado
       }
 
@@ -150,6 +162,7 @@ export function ContarProducto() {
 
   const isPending = addItem.isPending || correctItem.isPending
 
+  // QA H-08: in correction mode there is no SIGUIENTE — operator always returns to the list
   const handleSiguiente = useCallback(() => {
     const qty = parseQty(value)
     if (qty === null || isPending) return
@@ -174,11 +187,18 @@ export function ContarProducto() {
     })
   }, [value, isPending, handleSave, navigate])
 
+  // Enter key: in correction mode triggers OK y volver; in new count triggers SIGUIENTE
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === 'Enter') handleSiguiente()
+      if (e.key === 'Enter') {
+        if (isCorrection) {
+          handleOkYVolver()
+        } else {
+          handleSiguiente()
+        }
+      }
     },
-    [handleSiguiente],
+    [isCorrection, handleOkYVolver, handleSiguiente],
   )
 
   const parsedQty = parseQty(value)
@@ -188,8 +208,26 @@ export function ContarProducto() {
   // Guards
   // ---------------------------------------------------------------------------
 
+  // QA H-06: userId === null means auth is still loading (RequireAuth hasn't resolved yet).
+  // Show a skeleton instead of rendering a broken state.
+  if (userId === null) {
+    return (
+      <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
+        <header className="bg-gray-900 text-white px-4 py-4 flex items-center gap-3 flex-shrink-0">
+          <div className="min-h-[48px] min-w-[48px]" />
+          <div className="h-4 bg-gray-700 rounded w-32 animate-pulse" />
+        </header>
+        <main className="flex-1 flex items-center justify-center">
+          <div className="h-16 w-40 bg-gray-200 rounded animate-pulse" />
+        </main>
+      </div>
+    )
+  }
+
+  // QA H-05: no countId means the operator arrived without a valid session
+  // (manual URL or cleared localStorage). Redirect to the list so a new count starts.
   if (!productId || !countId) {
-    return null
+    return <Navigate to="/inventario" replace />
   }
 
   // ---------------------------------------------------------------------------
@@ -239,7 +277,10 @@ export function ContarProducto() {
         </div>
       </header>
 
-      {/* Correction banner — the only place where a previous value is shown */}
+      {/* Correction banner — the only place where a previous value is shown.
+          Excepción documentada al Principio #1: el banner muestra el valor previo
+          del propio operator porque es el hecho a corregir, no análisis del sistema.
+          Ver docs/ux/registro-inventario.md §Pantalla 2 (modo cambio) */}
       {isCorrection && previousItem !== undefined && (
         <div
           data-testid="correction-banner"
@@ -278,35 +319,45 @@ export function ContarProducto() {
         </div>
       </main>
 
-      {/* Action buttons */}
+      {/* Action buttons.
+          QA H-08: in correction mode only "OK y volver" is shown — no SIGUIENTE.
+          The operator came here to fix a specific item; after saving they return to the list. */}
       <footer className="px-4 py-6 bg-white border-t border-gray-200 flex gap-3">
-        {/* SIGUIENTE is the primary / larger button */}
-        <button
-          data-testid="btn-siguiente"
-          onClick={handleSiguiente}
-          disabled={!isValid || isPending}
-          className={[
-            'flex-[2] min-h-[56px] font-bold text-base uppercase tracking-wide',
-            isValid && !isPending
-              ? 'bg-gray-900 text-white active:opacity-70'
-              : 'bg-gray-200 text-gray-400 cursor-not-allowed',
-          ].join(' ')}
-        >
-          {isPending ? 'guardando...' : 'SIGUIENTE →'}
-        </button>
+        {/* SIGUIENTE is only available when counting new items, not when correcting */}
+        {!isCorrection && (
+          <button
+            data-testid="btn-siguiente"
+            onClick={handleSiguiente}
+            disabled={!isValid || isPending}
+            className={[
+              'flex-[2] min-h-[56px] font-bold text-base uppercase tracking-wide',
+              isValid && !isPending
+                ? 'bg-gray-900 text-white active:opacity-70'
+                : 'bg-gray-200 text-gray-400 cursor-not-allowed',
+            ].join(' ')}
+          >
+            {isPending ? 'guardando...' : 'SIGUIENTE →'}
+          </button>
+        )}
 
         <button
           data-testid="btn-ok-volver"
           onClick={handleOkYVolver}
           disabled={!isValid || isPending}
           className={[
-            'flex-1 min-h-[56px] font-semibold text-sm border uppercase tracking-wide',
-            isValid && !isPending
-              ? 'border-gray-400 text-gray-700 bg-white active:opacity-70'
-              : 'border-gray-200 text-gray-400 bg-gray-50 cursor-not-allowed',
+            isCorrection
+              ? 'flex-1 min-h-[56px] font-bold text-base uppercase tracking-wide'
+              : 'flex-1 min-h-[56px] font-semibold text-sm border uppercase tracking-wide',
+            isCorrection && isValid && !isPending
+              ? 'bg-gray-900 text-white active:opacity-70'
+              : !isCorrection && isValid && !isPending
+                ? 'border-gray-400 text-gray-700 bg-white active:opacity-70'
+                : isCorrection
+                  ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                  : 'border-gray-200 text-gray-400 bg-gray-50 cursor-not-allowed',
           ].join(' ')}
         >
-          OK y volver
+          {isPending ? 'guardando...' : isCorrection ? 'OK y volver' : 'OK y volver'}
         </button>
       </footer>
 
