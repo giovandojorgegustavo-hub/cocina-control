@@ -402,6 +402,7 @@ def test_create_owner_script_creates_user(postgres_url: str) -> None:
     transaction, so the user is visible to a fresh connection.
     """
     import os
+    from pathlib import Path
 
     from sqlalchemy import select
 
@@ -418,6 +419,8 @@ def test_create_owner_script_creates_user(postgres_url: str) -> None:
         "COCINA_JWT_SECRET": "test-secret-not-for-prod-min-32-chars-1234",
     }
 
+    repo_root = Path(__file__).resolve().parent.parent
+
     result = subprocess.run(
         [sys.executable, "-m", "cocina_control.scripts.create_owner",
          "--name", test_name, "--email", test_email],
@@ -425,7 +428,7 @@ def test_create_owner_script_creates_user(postgres_url: str) -> None:
         capture_output=True,
         text=True,
         env=env,
-        cwd="/home/fiax/cocina-control",
+        cwd=repo_root,
     )
 
     assert result.returncode == 0, (
