@@ -1,0 +1,243 @@
+"""Product catalogue endpoints.
+
+Routes
+------
+GET    /api/v1/products           — list active products (owner + operator)
+POST   /api/v1/products           — create product (owner only)
+PATCH  /api/v1/products/{id}      — update product (owner only)
+DELETE /api/v1/products/{id}      — soft-delete product (owner only)
+
+Invariants
+----------
+- Products are never physically deleted; is_active is set to false.
+- Name uniqueness is enforced only among active products (partial unique index).
+- name is always stored in UPPER CASE.
+- Every mutation (PATCH, soft-DELETE) records updated_by and updated_at.
+"""
+
+import uuid
+from datetime import UTC, datetime
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from cocina_control.api.deps import get_current_user, require_role
+from cocina_control.db import get_session
+from cocina_control.models.product import Product
+from cocina_control.models.user import User
+from cocina_control.schemas.product import (
+    ProductCreate,
+    ProductListItem,
+    ProductResponse,
+    ProductUpdate,
+)
+
+router = APIRouter(prefix="/products", tags=["products"])
+
+# Constraint name that guards active-product name uniqueness (migration 0002).
+_NAME_UNIQUE_CONSTRAINT = "ix_products_name_active_unique"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _get_product_or_404(session: Session, product_id: uuid.UUID) -> Product:
+    """Return the product by id. Raises 404 if it does not exist."""
+    product = session.get(Product, product_id)
+    if product is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+    return product
+
+
+def _assert_name_not_taken(
+    session: Session,
+    name: str,
+    exclude_id: uuid.UUID | None = None,
+) -> None:
+    """Raise 409 if an active product with the given name already exists.
+
+    exclude_id lets PATCH skip the product being edited (so a no-op rename
+    on the same product does not trigger a false conflict).
+    """
+    stmt = select(Product).where(
+        Product.name == name,
+        Product.is_active.is_(True),
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(Product.id != exclude_id)
+
+    existing = session.scalars(stmt).first()
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"An active product named '{name}' already exists",
+        )
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+# ---------------------------------------------------------------------------
+# GET /products
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "",
+    response_model=list[ProductListItem],
+    summary="List active products",
+)
+def list_products(
+    session: Session = Depends(get_session),
+    _current_user: User = Depends(get_current_user),
+) -> list[Product]:
+    """Return all active products ordered alphabetically by name."""
+    stmt = (
+        select(Product)
+        .where(Product.is_active.is_(True))
+        .order_by(Product.name)
+    )
+    return list(session.scalars(stmt).all())
+
+
+# ---------------------------------------------------------------------------
+# POST /products
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "",
+    response_model=ProductResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a product",
+)
+def create_product(
+    body: ProductCreate,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_role("owner")),
+) -> Product:
+    """Create a new product in the catalogue.
+
+    - name is normalised to UPPER CASE (with internal whitespace collapsed) by the schema.
+    - Duplicate name among active products returns 409.
+    """
+    _assert_name_not_taken(session, body.name)
+
+    product = Product(
+        id=uuid.uuid4(),
+        name=body.name,
+        unit=body.unit.value,
+        low_stock_threshold=body.low_stock_threshold,
+        is_active=True,
+        created_by=current_user.id,
+    )
+    session.add(product)
+    try:
+        session.flush()
+    except IntegrityError as exc:
+        session.rollback()
+        if _NAME_UNIQUE_CONSTRAINT in str(exc.orig):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Product name already exists",
+            ) from exc
+        raise
+
+    return product
+
+
+# ---------------------------------------------------------------------------
+# PATCH /products/{product_id}
+# ---------------------------------------------------------------------------
+
+
+@router.patch(
+    "/{product_id}",
+    response_model=ProductResponse,
+    summary="Update a product",
+)
+def update_product(
+    product_id: uuid.UUID,
+    body: ProductUpdate,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_role("owner")),
+) -> Product:
+    """Partially update a product.
+
+    - Only active products can be edited; 404 if the product does not exist or is inactive.
+    - If name changes, checks for collision with other active products.
+    - Records updated_by and updated_at on every successful mutation.
+    """
+    product = _get_product_or_404(session, product_id)
+
+    if not product.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found",
+        )
+
+    if body.name is not None and body.name != product.name:
+        _assert_name_not_taken(session, body.name, exclude_id=product_id)
+        product.name = body.name
+
+    if body.unit is not None:
+        product.unit = body.unit.value
+
+    if body.low_stock_threshold is not None:
+        product.low_stock_threshold = body.low_stock_threshold
+
+    product.updated_by = current_user.id
+    product.updated_at = _utcnow()
+
+    try:
+        session.flush()
+    except IntegrityError as exc:
+        session.rollback()
+        if _NAME_UNIQUE_CONSTRAINT in str(exc.orig):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Product name already exists",
+            ) from exc
+        raise
+
+    return product
+
+
+# ---------------------------------------------------------------------------
+# DELETE /products/{product_id}
+# ---------------------------------------------------------------------------
+
+
+@router.delete(
+    "/{product_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Deactivate a product",
+)
+def delete_product(
+    product_id: uuid.UUID,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_role("owner")),
+) -> None:
+    """Soft-delete a product by setting is_active = false.
+
+    Returns 404 if the product does not exist or is already inactive.
+    Records updated_by and updated_at before deactivating.
+    The row is never physically removed from the database.
+    """
+    product = _get_product_or_404(session, product_id)
+
+    if not product.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found",
+        )
+
+    product.updated_by = current_user.id
+    product.updated_at = _utcnow()
+    product.is_active = False
+    session.flush()

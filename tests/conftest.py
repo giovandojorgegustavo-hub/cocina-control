@@ -2,11 +2,17 @@
 
 import os
 import shutil
+import uuid
 from collections.abc import Generator
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.orm import Session
+
+if TYPE_CHECKING:
+    from cocina_control.models.user import User
 
 # ---------------------------------------------------------------------------
 # Test environment defaults — set BEFORE any cocina_control module is imported.
@@ -193,3 +199,57 @@ async def client(db_session: Session) -> AsyncClient:  # type: ignore[return]
     ) as ac:
         yield ac
     app.dependency_overrides.pop(get_session, None)
+
+
+# ---------------------------------------------------------------------------
+# Shared user fixtures — available to all test modules.
+# ---------------------------------------------------------------------------
+
+_TEST_PASSWORD = "correct-horse-battery-staple"
+
+
+def create_test_user(
+    session: Session,
+    role: str,
+    email: str,
+    password: str = _TEST_PASSWORD,
+) -> "User":
+    """Insert and return a User with the given role."""
+    from cocina_control.models.user import User
+    from cocina_control.security.passwords import hash_password
+
+    user = User(
+        id=uuid.uuid4(),
+        name=f"Test {role.capitalize()}",
+        email=email.lower(),
+        password_hash=hash_password(password),
+        role=role,
+        created_at=datetime.now(UTC),
+    )
+    session.add(user)
+    session.flush()
+    return user
+
+
+@pytest.fixture
+def owner_user(db_session: Session):
+    return create_test_user(db_session, "owner", f"owner-{uuid.uuid4().hex[:6]}@test.com")
+
+
+@pytest.fixture
+def operator_user(db_session: Session):
+    return create_test_user(db_session, "operator", f"op-{uuid.uuid4().hex[:6]}@test.com")
+
+
+@pytest.fixture
+def owner_token(owner_user) -> str:
+    from cocina_control.security.tokens import create_access_token
+
+    return create_access_token(owner_user.id, owner_user.role)
+
+
+@pytest.fixture
+def operator_token(operator_user) -> str:
+    from cocina_control.security.tokens import create_access_token
+
+    return create_access_token(operator_user.id, operator_user.role)

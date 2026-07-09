@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from decimal import Decimal
 
 import sqlalchemy as sa
@@ -14,9 +15,12 @@ class Product(Base, TimestampMixin):
     __tablename__ = "products"
 
     __table_args__ = (
+        # Unique partial index: only one active product can share a name.
+        # Mirrors the index created by migration 0002_products_name_unique_active.
         sa.Index(
-            "ix_products_name_active",
+            "ix_products_name_active_unique",
             "name",
+            unique=True,
             postgresql_where=sa.text("is_active = true"),
         ),
         sa.CheckConstraint(
@@ -38,4 +42,12 @@ class Product(Base, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
     created_by: Mapped[uuid.UUID] = mapped_column(
         sa.ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    # Audit columns: set on every PATCH and soft-DELETE.
+    # nullable because products created before this migration have no mutation history.
+    updated_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        sa.ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
     )
