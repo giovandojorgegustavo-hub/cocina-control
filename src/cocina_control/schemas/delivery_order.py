@@ -121,13 +121,13 @@ class DeliveryOrderDetailResponse(BaseModel):
     items: list[DeliveryOrderItemResponse]
     created_at: datetime
     corrects_id: uuid.UUID | None = None
+    reason: str | None = None
 
 
 class DeliveryOrderPhotoResponse(BaseModel):
     id: uuid.UUID
     photo_at: datetime
-    # relative path stored in DB — not the serving URL
-    photo_url: str
+    # photo_url is intentionally omitted — use GET /delivery-orders/{id}/photo to download
 
 
 class DeliveryOrderCancelResponse(BaseModel):

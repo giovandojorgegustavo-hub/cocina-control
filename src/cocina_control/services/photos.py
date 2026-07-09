@@ -127,6 +127,11 @@ def save_photo(raw: bytes, ext: str, photos_root: Path, taken_at: datetime) -> s
     Returns:
         Relative path string in the form '{year}/{month}/{uuid}.{ext}'.
         This value is stored in delivery_orders.photo_url.
+
+    Implementation note:
+        Writes to a .tmp file first so that the caller can flush the DB and
+        then do an atomic os.replace().  The caller is responsible for the
+        rename — see upload_photo in delivery_orders.py.
     """
     year = taken_at.astimezone(UTC).strftime("%Y")
     month = taken_at.astimezone(UTC).strftime("%m")
@@ -135,9 +140,10 @@ def save_photo(raw: bytes, ext: str, photos_root: Path, taken_at: datetime) -> s
 
     dest = photos_root / year / month / file_name
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(raw)
+    tmp = dest.with_name(dest.name + ".tmp")
+    tmp.write_bytes(raw)
 
-    return relative
+    return relative, tmp, dest  # caller must os.replace(tmp, dest) after DB flush
 
 
 # ---------------------------------------------------------------------------
@@ -151,13 +157,19 @@ def resolve_path_safely(relative: str, photos_root: Path) -> Path:
     The filename stored in the DB is always a UUID, so traversal is structurally
     impossible — but this check is an explicit defensive layer.
 
+    Uses Path.relative_to() instead of startswith() to correctly handle:
+    - Relative '.' paths
+    - Symlinks (resolve() follows them before the check)
+    - Ambiguous prefix matches (e.g. /root-extra vs /root)
+
     Raises:
         ValueError: if the resolved path escapes photos_root.
     """
     root = photos_root.resolve()
     candidate = (root / relative).resolve()
-    # Check that candidate is inside root (resolve() follows symlinks).
-    if not str(candidate).startswith(str(root) + "/") and candidate != root:
+    try:
+        candidate.relative_to(root)
+    except ValueError:
         raise ValueError(
             f"Resolved path {candidate} is outside photos_root {root}"
         )

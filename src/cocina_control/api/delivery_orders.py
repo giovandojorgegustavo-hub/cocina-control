@@ -6,6 +6,7 @@ POST   /api/v1/delivery-orders              — operator creates pending order
 POST   /api/v1/delivery-orders/{id}/photo   — operator uploads photo
 GET    /api/v1/delivery-orders/{id}/photo   — owner or uploader downloads photo
 GET    /api/v1/delivery-orders              — inbox list (operator + owner)
+GET    /api/v1/delivery-orders/{id}         — full detail for one order (operator + owner)
 POST   /api/v1/delivery-orders/{id}/complete— operator marks completed + items
 POST   /api/v1/delivery-orders/{id}/cancel  — operator or owner cancels (append-only)
 POST   /api/v1/delivery-orders/{id}/correct — operator (same-day) or owner corrects
@@ -33,6 +34,7 @@ the resolved absolute path stays within PHOTOS_ROOT.
 """
 
 import logging
+import os
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated
@@ -126,12 +128,18 @@ def _validate_products(
 
 
 def _get_leaf_items(session: Session, order_id: uuid.UUID) -> list[DeliveryOrderItem]:
-    """Return current (leaf) items for an order."""
-    all_items = session.scalars(
-        select(DeliveryOrderItem).where(DeliveryOrderItem.delivery_order_id == order_id)
-    ).all()
-    corrected_ids = {i.corrects_id for i in all_items if i.corrects_id is not None}
-    return [i for i in all_items if i.id not in corrected_ids]
+    """Return all items for an order.
+
+    Item-level correction (corrects_id on DeliveryOrderItem) does not apply
+    in this domain — orders are corrected as a whole via correct_order().
+    The corrects_id column exists from the generic append-only schema but is
+    never populated here, so a simple SELECT is correct and sufficient.
+    """
+    return list(
+        session.scalars(
+            select(DeliveryOrderItem).where(DeliveryOrderItem.delivery_order_id == order_id)
+        ).all()
+    )
 
 
 def _build_item_responses(
@@ -163,6 +171,7 @@ def _order_to_detail(
         items=items,
         created_at=order.created_at,
         corrects_id=order.corrects_id,
+        reason=order.reason,
     )
 
 
@@ -242,13 +251,13 @@ async def upload_photo(
 
     Stored at: PHOTOS_ROOT/{year}/{month}/{uuid}.{ext}
     photo_url in DB: relative path '{year}/{month}/{uuid}.{ext}'
-    """
-    try:
-        raw, ext = await read_and_validate_upload(file)
-    except PhotoValidationError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
-    # SELECT FOR UPDATE — guard against concurrent duplicate uploads.
+    Filesystem safety:
+    - The order is locked (SELECT FOR UPDATE) before reading the file.
+    - save_photo() writes to a .tmp file; os.replace() runs only after DB flush
+      succeeds.  If flush fails the .tmp is deleted and no orphan is left.
+    """
+    # 1. Lock the order row before touching the filesystem.
     order = _get_order_for_update_or_404(session, order_id)
 
     if order.photo_url is not None:
@@ -257,21 +266,32 @@ async def upload_photo(
             detail="photo already exists; use /correct to replace it",
         )
 
+    # 2. Read and validate upload (after order check to avoid IO on bad orders).
+    try:
+        raw, ext = await read_and_validate_upload(file)
+    except PhotoValidationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
     now = datetime.now(UTC)
     settings = get_settings()
 
-    relative_path = save_photo(raw, ext, settings.photos_root, now)
+    # 3. Write to .tmp — no permanent file until DB flush succeeds.
+    relative_path, tmp_path, final_path = save_photo(raw, ext, settings.photos_root, now)
 
-    order.photo_url = relative_path
-    order.photo_at = now
-    order.photo_by = current_user.id
-
-    session.flush()
+    try:
+        order.photo_url = relative_path
+        order.photo_at = now
+        order.photo_by = current_user.id
+        session.flush()
+        # Atomic rename: only runs if flush succeeded.
+        os.replace(tmp_path, final_path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
     return DeliveryOrderPhotoResponse(
         id=order.id,
         photo_at=now,
-        photo_url=relative_path,
     )
 
 
@@ -304,20 +324,18 @@ def get_photo(
     """
     order = _get_order_or_404(session, order_id)
 
+    # 1. Authorize first — prevents existence oracle for operators who didn't upload.
+    if current_user.role == "operator" and order.photo_by != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    elif current_user.role not in ("operator", "owner"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    # 2. Check photo existence after auth.
     if order.photo_url is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="This order has no photo yet",
         )
-
-    # Authorization: owner always, operator only if they took the photo.
-    if current_user.role == "operator" and order.photo_by != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden",
-        )
-    elif current_user.role not in ("operator", "owner"):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
     settings = get_settings()
     try:
@@ -341,7 +359,10 @@ def get_photo(
     ext = order.photo_url.rsplit(".", 1)[-1].lower()
     media_type = content_type_for_extension(ext)
 
-    return FileResponse(path=str(abs_path), media_type=media_type)
+    response = FileResponse(path=str(abs_path), media_type=media_type)
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -492,9 +513,8 @@ def cancel_order(
         corrects_id=order_id,
         # Carry over platform if set, as metadata reference.
         platform=order.platform,
+        reason=body.reason,
     )
-    # Store reason in a log entry — there is no reason column on delivery_orders.
-    # Log it structured so ops can query it if needed.
     session.add(new_order)
 
     try:
@@ -511,7 +531,7 @@ def cancel_order(
             "new_order_id": str(new_order.id),
             "actor_id": str(current_user.id),
             "actor_role": current_user.role,
-            "reason_length": len(body.reason) if body.reason else 0,
+            "has_reason": body.reason is not None,
         },
     )
 
@@ -595,9 +615,11 @@ def correct_order(
         completed_by=current_user.id,
         corrects_id=order_id,
         platform=platform,
+        reason=body.reason,
     )
     session.add(new_order)
 
+    # Flush 1: persist new_order row (IntegrityError guard for concurrent correct).
     try:
         session.flush()
     except IntegrityError as exc:
@@ -614,6 +636,7 @@ def correct_order(
         )
         session.add(item)
 
+    # Flush 2: persist items — log only after both flushes succeed.
     session.flush()
 
     log.info(
@@ -624,7 +647,7 @@ def correct_order(
             "new_order_id": str(new_order.id),
             "actor_id": str(current_user.id),
             "actor_role": current_user.role,
-            "reason_length": len(body.reason) if body.reason else 0,
+            "has_reason": body.reason is not None,
         },
     )
 
@@ -636,3 +659,31 @@ def correct_order(
         items=items,
         created_at=new_order.created_at,
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /delivery-orders/{id}
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/{order_id}",
+    response_model=DeliveryOrderDetailResponse,
+    summary="Get order detail (operator or owner)",
+)
+def get_order_detail(
+    order_id: uuid.UUID,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> DeliveryOrderDetailResponse:
+    """Return full detail for a single order.
+
+    Access: operator or owner.
+    Items are included only for completed orders (pending orders have none).
+    The reason field is populated for cancelled/corrected orders.
+    """
+    if current_user.role not in ("operator", "owner"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    order = _get_order_or_404(session, order_id)
+    return _order_to_detail(session, order)

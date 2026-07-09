@@ -63,6 +63,7 @@ class DeliveryOrder(Base, TimestampMixin):
     corrects_id: Mapped[uuid.UUID | None] = mapped_column(
         sa.ForeignKey("delivery_orders.id", ondelete="RESTRICT"), nullable=True
     )
+    reason: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
 
 
 class DeliveryOrderItem(Base, AppendOnlyMixin):
