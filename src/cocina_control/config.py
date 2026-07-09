@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -11,6 +13,10 @@ class Settings(BaseSettings):
     jwt_secret: str
     jwt_expire_minutes: int = 60 * 8  # 8-hour default matches a full work shift
     jwt_algorithm: str = "HS256"
+
+    # Photo storage root — override with COCINA_PHOTOS_ROOT in production.
+    # In production this should be an absolute path: /var/lib/cocina-control/photos
+    photos_root: Path = Path("./var/lib/cocina-control/photos")
 
     @field_validator("jwt_secret")
     @classmethod
