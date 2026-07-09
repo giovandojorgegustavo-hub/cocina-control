@@ -45,6 +45,14 @@ class InventoryCount(Base, TimestampMixin):
     created_by: Mapped[uuid.UUID] = mapped_column(
         sa.ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
+    # Audit: who last mutated this count session (complete, correction in session).
+    # NULL until the first mutation after creation.
+    updated_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        sa.ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
 
 
 class InventoryCountItem(Base, AppendOnlyMixin):
@@ -54,6 +62,10 @@ class InventoryCountItem(Base, AppendOnlyMixin):
         sa.Index("ix_inventory_count_items_count_id", "inventory_count_id"),
         sa.Index("ix_inventory_count_items_product_id", "product_id"),
         sa.Index("ix_inventory_count_items_corrects_id", "corrects_id"),
+        # Prevent chain bifurcation: each item can be corrected at most once.
+        # If two concurrent corrections race past the leaf check, the second
+        # INSERT will fail here with IntegrityError (uq_inventory_count_items_corrects_id).
+        sa.UniqueConstraint("corrects_id", name="uq_inventory_count_items_corrects_id"),
         sa.CheckConstraint(
             "corrects_id IS DISTINCT FROM id",
             name="ck_inventory_count_items_no_self_correction",
@@ -79,3 +91,5 @@ class InventoryCountItem(Base, AppendOnlyMixin):
     corrects_id: Mapped[uuid.UUID | None] = mapped_column(
         sa.ForeignKey("inventory_count_items.id", ondelete="RESTRICT"), nullable=True
     )
+    # Optional explanation for corrections.  NULL on original items.
+    reason: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
