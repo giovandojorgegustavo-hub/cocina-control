@@ -1,0 +1,17 @@
+name: Gates de la Fabrica
+
+on:
+  pull_request:
+
+jobs:
+  estructura:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verificar golden path
+        run: |
+          for d in src tests migrations docs; do
+            test -d "$d" || { echo "FALTA la carpeta $d"; exit 1; }
+          done
+          test -f CLAUDE.md || { echo "FALTA CLAUDE.md"; exit 1; }
+          echo "Estructura OK - gate aprobado"

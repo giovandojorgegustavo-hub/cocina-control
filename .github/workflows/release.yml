@@ -1,0 +1,17 @@
+name: Despacho de Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  despachar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy a dev (simulado)
+        run: echo "Desplegando ${{ github.ref_name }} en DEV..."
+      - name: Deploy a preprod (simulado)
+        run: echo "Desplegando ${{ github.ref_name }} en PREPROD..."
+      - name: Deploy a prod (simulado)
+        run: echo "Desplegando ${{ github.ref_name }} en PROD... listo"

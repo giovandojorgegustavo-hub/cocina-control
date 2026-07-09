@@ -1,0 +1,12 @@
+# Secretos - JAMAS al repo
+.env
+*.key
+*.pem
+
+# Basura generada
+node_modules/
+*.log
+.DS_Store
+
+# Artefactos locales de herramientas
+.atl/
