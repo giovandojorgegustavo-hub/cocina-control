@@ -93,3 +93,51 @@ export interface Product {
   unit: string
   low_stock_threshold: number | null
 }
+
+// ---------------------------------------------------------------------------
+// Inventory counts
+// ---------------------------------------------------------------------------
+
+export type InventoryCountStatus = 'in_progress' | 'completed'
+
+export interface InventoryCountItem {
+  /** item_id from the server — used for corrections */
+  id: string
+  product_id: string
+  quantity: number
+}
+
+export interface InventoryCount {
+  id: string
+  status: InventoryCountStatus
+  started_at: string
+  /** Leaf items per product: the effective (most recent) count for each product */
+  items: InventoryCountItem[]
+}
+
+export interface StartInventoryCountResponse {
+  id: string
+  status: 'in_progress'
+  started_at: string
+}
+
+export interface AddInventoryItemPayload {
+  product_id: string
+  quantity: number
+}
+
+export interface AddInventoryItemResponse {
+  item_id: string
+  product_id: string
+  quantity: number
+}
+
+export interface CorrectInventoryItemPayload {
+  quantity: number
+  reason?: string
+}
+
+export interface CorrectInventoryItemResponse {
+  new_item_id: string
+  corrects_id: string
+}
