@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     app_env: str = "dev"
     log_level: str = "INFO"
     database_url: str
+    jwt_secret: str
+    jwt_expire_minutes: int = 60 * 8  # 8-hour default matches a full work shift
+    jwt_algorithm: str = "HS256"
 
 
 _settings: Settings | None = None

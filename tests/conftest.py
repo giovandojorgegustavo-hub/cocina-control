@@ -8,7 +8,30 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.orm import Session
 
-from cocina_control.main import app
+# ---------------------------------------------------------------------------
+# Test environment defaults — set BEFORE any cocina_control module is imported.
+# The Settings singleton is lazy (created on first get_settings() call), so
+# setting env vars here guarantees they are present when the singleton forms.
+#
+# COCINA_DATABASE_URL is set to a placeholder so that Settings() validates
+# without error.  The actual database connection for tests comes from the
+# db_engine fixture (which calls build_engine(postgres_url) directly); the
+# module-level engine singleton in db.py is never used in tests because
+# every test overrides the get_session dependency.
+# ---------------------------------------------------------------------------
+os.environ.setdefault("COCINA_JWT_SECRET", "test-secret-not-for-prod")
+os.environ.setdefault(
+    "COCINA_DATABASE_URL", "postgresql+psycopg://test:test@localhost/test_placeholder"
+)
+
+# Speed up bcrypt for tests: 4 rounds instead of 12.
+# This is safe because the reduced work factor only applies during the test
+# run; production always uses the default (12 rounds from passwords.py).
+import cocina_control.security.passwords as _pw_module  # noqa: E402
+
+_pw_module.BCRYPT_ROUNDS = 4
+
+from cocina_control.main import app  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # pytest-postgresql: ephemeral process fixture (session-scoped).
