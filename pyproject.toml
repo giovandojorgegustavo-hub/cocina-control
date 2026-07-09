@@ -11,6 +11,9 @@ dependencies = [
     "sqlalchemy>=2.0",
     "alembic>=1.13",
     "psycopg[binary]>=3.2",
+    "bcrypt>=4.0",
+    "pyjwt>=2.9",
+    "email-validator>=2.0",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +35,9 @@ packages = ["src/cocina_control"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "timing: timing-sensitive tests that may be flaky in CI; exclude with -m 'not timing'",
+]
 
 [tool.ruff]
 line-length = 100
