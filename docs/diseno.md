@@ -182,20 +182,37 @@ Qué significa en la práctica: el CSV es la fuente forense completa. Muestra to
 
 ### 3.a. Propuesta por capa
 
+**Importante: hay UNA sola base de datos en este sistema — PostgreSQL.** Las otras herramientas de la tabla de abajo no son bases de datos adicionales: son librerías Python que se apoyan sobre esa única base. Esto se explica en detalle en la sección 3.b.
+
+**Infraestructura y API**
+
 | Capa | Tecnología elegida | Rol |
 |---|---|---|
 | Backend / API | FastAPI (Python) | Servidor que recibe las llamadas de la app y aplica la lógica de negocio |
-| ORM y migraciones | SQLAlchemy 2 + Alembic | Mapeo de modelos a tablas y versionado de cambios de esquema |
-| Validación | Pydantic v2 | Validación de inputs y serialización de respuestas |
-| Base de datos | PostgreSQL | Almacena todos los registros de eventos, usuarios, productos |
+| Base de datos | PostgreSQL | La única base de datos del sistema: almacena todos los registros de eventos, usuarios y productos |
 | Almacenamiento de fotos | Filesystem local del droplet | Guarda los archivos de imagen de los pedidos en el servidor propio |
-| Reverse proxy | Nginx | Termina HTTPS, sirve archivos estáticos (fotos), enruta tráfico al proceso FastAPI |
+| Reverse proxy | Caddy | Termina HTTPS (con renovación automática de certificados vía Let's Encrypt), enruta tráfico al proceso FastAPI |
 | Proceso en producción | systemd | Mantiene el proceso FastAPI corriendo y lo reinicia si falla |
 | Hosting | Droplet DigitalOcean (propio del dueño) | Servidor dedicado bajo control total del dueño |
 | Forma de servir la API | REST sobre HTTPS | Protocolo de comunicación entre la app y el servidor |
-| Testing | pytest | Tests unitarios y de integración |
-| Lint | ruff | Análisis estático y formateo de código Python |
-| Gestión de dependencias | uv | Instalación y lockfile de paquetes Python |
+
+**Librerías Python que operan sobre PostgreSQL**
+
+Estas tres herramientas no son bases de datos; son capas de software Python que le hablan a PostgreSQL desde el código:
+
+| Librería | Rol |
+|---|---|
+| SQLAlchemy 2 | ORM: define los modelos como clases Python y los traduce a SQL. Es la manera en que el código Python le habla a PostgreSQL |
+| Alembic | Migraciones: cada cambio de estructura de la base de datos queda versionado como un archivo. Es el registro de cambios de estructura de PostgreSQL |
+| Pydantic v2 | Validación: verifica que los datos que entran y salen por la API tengan la forma correcta, antes de tocar la base de datos |
+
+**Herramientas de desarrollo**
+
+| Herramienta | Rol |
+|---|---|
+| pytest | Tests unitarios y de integración |
+| ruff | Análisis estático y formateo de código Python |
+| uv | Instalación y lockfile de paquetes Python |
 
 ### 3.b. Justificación por capa
 
@@ -217,17 +234,21 @@ Qué significa en la práctica: ningún cambio de estructura de la base de datos
 
 Valida los datos que entran por la API (tipos, formatos, longitudes) y serializa lo que sale. FastAPI lo usa internamente; el contrato de cada endpoint queda expresado como una clase Python que funciona como documentación ejecutable.
 
-**PostgreSQL**
+**Una sola base de datos: PostgreSQL**
 
-Base de datos relacional madura, con soporte nativo para transacciones (operaciones que se aplican completas o no se aplican). Eso es crítico para el modelo append-only: cuando el operario valida una entrega, el stock tiene que actualizarse en la misma operación que se guarda la validación — o ninguna de las dos. PostgreSQL garantiza eso.
+Este es un punto que vale la pena dejar completamente claro porque puede generar confusión: en este sistema hay UNA sola base de datos, y es PostgreSQL. SQLAlchemy, Alembic y Pydantic NO son bases de datos adicionales — son herramientas Python que se apoyan sobre esa única base.
+
+La analogía concreta: PostgreSQL es el archivador donde vive toda la información. SQLAlchemy es la manera en que el código Python le habla a ese archivador — traduce instrucciones Python a SQL, sin que el programador tenga que escribir SQL a mano. Alembic es el registro de cambios de estructura del archivador — cada vez que se agrega una columna o una tabla nueva, Alembic guarda ese cambio como un archivo versionado, y se puede aplicar o revertir con un comando. Pydantic es el portero que verifica que los datos que entran y salen por la API tengan la forma correcta — tipo correcto, campos requeridos, longitudes válidas — antes de que lleguen a PostgreSQL.
+
+PostgreSQL como motor de base de datos es robusto, maduro, y tiene soporte nativo para transacciones (operaciones que se aplican completas o no se aplican). Eso es crítico para el modelo append-only: cuando el operario valida una entrega, el stock tiene que actualizarse en la misma operación que se guarda la validación — o ninguna de las dos. PostgreSQL garantiza eso.
 
 Qué significa en la práctica: si el servidor se cae en el medio de una validación, la base de datos vuelve al estado anterior limpio. No quedan datos a medias.
 
-**Nginx + systemd + droplet DigitalOcean**
+**Caddy + systemd + droplet DigitalOcean**
 
-El droplet es el servidor que ya opera el dueño: hardware dedicado, sin sorpresas de facturación por tráfico, sin límites de plan administrado. Nginx actúa como reverse proxy: recibe las conexiones HTTPS, termina el SSL, y reenvía las llamadas a la API al proceso FastAPI que corre internamente. También sirve las fotos como archivos estáticos (con validación de autenticación antes de cada archivo — ver sección 5). systemd es el administrador de procesos del sistema operativo Linux; se encarga de arrancar FastAPI al bootear el servidor y de reiniciarlo si falla.
+El droplet es el servidor que ya opera el dueño: hardware dedicado, sin sorpresas de facturación por tráfico, sin límites de plan administrado. Caddy actúa como reverse proxy: recibe las conexiones HTTPS, termina el SSL con renovación automática de certificados vía Let's Encrypt (sin configurar ni monitorear renovaciones manualmente), y reenvía las llamadas a la API al proceso FastAPI que corre internamente. La sintaxis de configuración de Caddy es significativamente más simple que la de otras alternativas, y es la herramienta que el dueño ya opera en su servidor — lo que elimina una capa de aprendizaje. systemd es el administrador de procesos del sistema operativo Linux; se encarga de arrancar FastAPI al bootear el servidor y de reiniciarlo si falla.
 
-Qué significa en la práctica: el servidor es infraestructura propia. El dueño no depende de ninguna plataforma gestionada. No hay facturación variable, no hay límites de plan, no hay vendor lock-in. Si algo falla, se conecta al droplet por SSH y se revisa directamente.
+Qué significa en la práctica: el servidor es infraestructura propia. El dueño no depende de ninguna plataforma gestionada. No hay facturación variable, no hay límites de plan, no hay vendor lock-in. Los certificados HTTPS se renuevan solos — es una cosa menos para monitorear. Si algo falla, se conecta al droplet por SSH y se revisa directamente.
 
 **REST sobre HTTPS**
 
@@ -412,24 +433,30 @@ products <--- referenciado por delivery_items, delivery_order_items, inventory_c
 El frontend comprime la foto en el dispositivo antes de enviarla (JPEG, calidad adaptativa, techo de 800 KB). La subida se hace directamente al backend en un único paso:
 
 1. El frontend envía la foto al endpoint `POST /api/v1/delivery-orders/{id}/photo` como multipart/form-data.
-2. El backend valida el JWT, guarda el archivo en el filesystem del droplet, y registra la ruta en la base de datos.
+2. FastAPI valida el JWT, valida el archivo (tamaño y formato), guarda el archivo en el filesystem del droplet, y registra la ruta en la base de datos.
 
-Límites:
-- Tamaño máximo aceptado por el servidor: 2 MB (configurado en Nginx y validado en FastAPI).
+Límites (validados directamente por FastAPI):
+- Tamaño máximo aceptado: 2 MB.
 - Formatos aceptados: JPEG y PNG.
 - Si la subida falla (sin conexión), el frontend guarda la foto localmente y reintenta cuando vuelve la red. El registro del pedido ya existe en la base de datos; solo le falta la ruta de la foto.
 
 ### 5.b. Dónde se guardan
 
-En el filesystem local del droplet, en la ruta `/var/lib/cocina-control/photos/{año}/{mes}/{uuid}.jpg`. El directorio no es público; Nginx no expone esa ruta directamente. Para acceder a una foto, la solicitud pasa primero por FastAPI, que valida el JWT y verifica que el usuario sea dueño o el operario que creó el pedido. Si la validación pasa, FastAPI responde con un header `X-Accel-Redirect` que le indica a Nginx que sirva el archivo internamente. El archivo nunca viaja dos veces por la red.
+En el filesystem local del droplet, en la ruta `/var/lib/cocina-control/photos/{año}/{mes}/{uuid}.jpg`. El directorio no es accesible públicamente — Caddy no tiene ninguna regla que exponga esa ruta. Solo FastAPI puede acceder a ella.
 
-Qué significa en la práctica: nadie puede ver las fotos si no está logueado en el sistema. La URL de una foto no funciona sin un token válido. El servicio de las fotos no tiene costo variable — están en el mismo servidor que ya paga el dueño.
+### 5.c. Cómo se sirven
 
-### 5.c. Cómo se sirven al dueño en el tablero
+Para acceder a una foto, el cliente (tablero del dueño o app del operario) hace una petición `GET /api/v1/delivery-orders/{id}/photo` con su JWT en el header de autorización. El flujo es:
+
+1. FastAPI recibe la petición.
+2. FastAPI valida el JWT y verifica que el usuario sea dueño o el operario que creó el pedido. Si no pasa, retorna 401 o 403.
+3. FastAPI construye la ruta del archivo en el filesystem local y responde con `FileResponse`, enviando el binario directamente al cliente con el `Content-Type` correcto (`image/jpeg` o `image/png`).
+
+Por qué a esta escala este enfoque es el correcto: con 4 operarios y volumen bajo, la lógica de autorización vive en un solo lugar (FastAPI) sin duplicarla ni dividirla entre el proxy y la aplicación. Menos configuración, menos superficies donde algo puede salir mal. Si en el futuro el volumen de fotos crece y el ancho de banda del proceso FastAPI se convierte en un cuello de botella, se puede migrar al equivalente en Caddy — que es delegar el servicio del archivo al proxy usando `handle_path` combinado con un mecanismo de validación de token — pero esa optimización no está justificada hoy.
+
+Qué significa en la práctica: nadie puede ver las fotos si no está logueado en el sistema. La URL de una foto no funciona sin un token válido. Las fotos están en el mismo servidor que ya paga el dueño — no hay costo variable de almacenamiento externo.
 
 El tablero del dueño solicita la lista de pedidos. Cada pedido incluye la URL del endpoint de foto (`/api/v1/delivery-orders/{id}/photo`). El frontend la usa como `src` de la imagen; el navegador envía el JWT automáticamente y recibe el archivo. Si el dueño quiere ver la foto en tamaño completo, accede al mismo endpoint — no hay URL separada que expire.
-
-Qué significa en la práctica: las fotos se cargan tan rápido como la conexión del droplet lo permita. No hay expiración de links ni necesidad de refrescar URLs.
 
 ### 5.d. Retención y backup
 
@@ -489,6 +516,7 @@ Códigos de error comunes:
 | GET | `/delivery-orders` | Bandeja de pedidos | `?status=pending` (opcional) | `[{id, status, photo_url, photo_at, photo_by}]` | Operario, Dueño |
 | POST | `/delivery-orders` | Crear pedido (solo registro, sin foto aún) | — | `{id, status: pending}` | Operario |
 | POST | `/delivery-orders/{id}/photo` | Subir foto del pedido | multipart/form-data (`file`) | `{id, photo_path, photo_at}` | Operario |
+| GET | `/delivery-orders/{id}/photo` | Descargar foto del pedido | — | binario de imagen con `Content-Type: image/jpeg` o `image/png` | Operario, Dueño |
 | POST | `/delivery-orders/{id}/complete` | Completar pedido con lista de productos | `{items: [{product_id, quantity}]}` | `{id, status: completed, items}` | Operario |
 | POST | `/delivery-orders/{id}/cancel` | Anular un pedido pendiente | `{reason?}` | `{id, corrects_id}` | Operario, Dueño |
 | POST | `/delivery-orders/{id}/correct` | Corregir productos de un pedido terminado | `{items: [{product_id, quantity}]}` | `{new_order_id, corrects_id}` | Operario, Dueño |
@@ -528,7 +556,7 @@ rsync nocturno del directorio `/var/lib/cocina-control/photos/` al destino de ba
 **Monitoreo mínimo**
 
 - systemd reinicia el proceso FastAPI automáticamente si falla. El log queda en `journalctl -u cocina-control`.
-- Nginx registra accesos y errores en `/var/log/nginx/`. Un cron de logrotate evita que crezcan indefinidamente.
+- Caddy registra accesos y errores vía `journalctl -u caddy` (si corre como servicio systemd, que es lo habitual) o en `/var/log/caddy/` si está configurado con archivo de log explícito. Un cron de logrotate evita que los archivos de log crezcan indefinidamente si se usa la opción de archivo. Los certificados HTTPS se renuevan solos — Caddy se encarga sin intervención manual, es una cosa menos para monitorear.
 - Para producción: configurar una alerta simple de uptime (UptimeRobot en plan gratuito o similar) que avise por email si el servidor no responde en más de 2 minutos.
 
 **Despliegue**
