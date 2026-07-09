@@ -6,6 +6,21 @@ class Settings(BaseSettings):
 
     app_env: str = "dev"
     log_level: str = "INFO"
+    database_url: str
 
 
-settings = Settings()
+_settings: Settings | None = None
+
+
+def get_settings() -> Settings:
+    """Return the application settings singleton.
+
+    Instantiated on first call so that importing this module never fails
+    when COCINA_DATABASE_URL is absent (e.g. during test collection).
+    The application raises a clear ValidationError at startup if the
+    variable is missing.
+    """
+    global _settings
+    if _settings is None:
+        _settings = Settings()
+    return _settings
