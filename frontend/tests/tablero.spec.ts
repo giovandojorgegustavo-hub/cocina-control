@@ -21,10 +21,16 @@ async function injectToken(page: import('@playwright/test').Page, role: 'operato
 // Mock data helpers
 // ---------------------------------------------------------------------------
 
+// UUID v4 identifiers used in mock data — must be valid so the Trazabilidad
+// page guard does not redirect when the test navigates to the product detail.
+const UUID_PALTA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+const UUID_POLLO = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+const UUID_QUESO = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+
 const MOCK_SUMMARY_FULL = {
   products: [
     {
-      product_id: 'prod-palta',
+      product_id: UUID_PALTA,
       name: 'PALTA',
       unit: 'un',
       stock_now: 4,
@@ -35,7 +41,7 @@ const MOCK_SUMMARY_FULL = {
       low_stock_threshold: 10,
     },
     {
-      product_id: 'prod-pollo',
+      product_id: UUID_POLLO,
       name: 'POLLO',
       unit: 'kg',
       stock_now: 12,
@@ -46,7 +52,7 @@ const MOCK_SUMMARY_FULL = {
       low_stock_threshold: null,
     },
     {
-      product_id: 'prod-queso',
+      product_id: UUID_QUESO,
       name: 'QUESO',
       unit: 'kg',
       stock_now: 0.5,
@@ -59,14 +65,14 @@ const MOCK_SUMMARY_FULL = {
   ],
   low_stock: [
     {
-      product_id: 'prod-palta',
+      product_id: UUID_PALTA,
       name: 'PALTA',
       unit: 'un',
       stock_now: 4,
       low_stock_threshold: 10,
     },
     {
-      product_id: 'prod-queso',
+      product_id: UUID_QUESO,
       name: 'QUESO',
       unit: 'kg',
       stock_now: 0.5,
@@ -260,7 +266,7 @@ test('test_table_row_click_navigates_to_traceability', async ({ page }) => {
   // Click the PALTA row (desktop table has role=button per row)
   await page.getByRole('button', { name: /ver trazabilidad de PALTA/i }).first().click()
 
-  await expect(page).toHaveURL(/\/tablero\/producto\/prod-palta/)
+  await expect(page).toHaveURL(new RegExp(`/tablero/producto/${UUID_PALTA}`))
 })
 
 // ---------------------------------------------------------------------------
@@ -395,4 +401,190 @@ test('test_export_csv_downloads_file', async ({ page }) => {
 
   // Filename must follow the pattern cocina-control_{from}_{to}.csv
   expect(download.suggestedFilename()).toMatch(/^cocina-control_.+_.+\.csv$/)
+})
+
+// ---------------------------------------------------------------------------
+// test_csv_download_401_redirects_to_login
+// ---------------------------------------------------------------------------
+
+test('test_csv_download_401_redirects_to_login', async ({ page }) => {
+  await injectToken(page, 'owner')
+
+  await page.route(SUMMARY_URL, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(MOCK_SUMMARY_FULL),
+    })
+  })
+
+  // Export endpoint returns 401
+  await page.route(EXPORT_URL, (route) => {
+    route.fulfill({ status: 401, body: '' })
+  })
+
+  await page.goto('/tablero')
+
+  // Wait for data
+  await expect(page.getByRole('region', { name: /pedidos en el periodo/i })).toBeVisible()
+
+  await page.getByRole('button', { name: /descargar CSV/i }).click()
+
+  // Must redirect to /login
+  await expect(page).toHaveURL('/login', { timeout: 5000 })
+})
+
+// ---------------------------------------------------------------------------
+// test_csv_download_other_error_shows_toast
+// ---------------------------------------------------------------------------
+
+test('test_csv_download_other_error_shows_toast', async ({ page }) => {
+  await injectToken(page, 'owner')
+
+  await page.route(SUMMARY_URL, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(MOCK_SUMMARY_FULL),
+    })
+  })
+
+  // Export endpoint returns a server error
+  await page.route(EXPORT_URL, (route) => {
+    route.fulfill({ status: 500, body: '' })
+  })
+
+  await page.goto('/tablero')
+
+  await expect(page.getByRole('region', { name: /pedidos en el periodo/i })).toBeVisible()
+
+  await page.getByRole('button', { name: /descargar CSV/i }).click()
+
+  // Must show an error message — NOT redirect
+  await expect(page.getByRole('alert').filter({ hasText: /no se pudo descargar el CSV/i })).toBeVisible()
+  await expect(page).toHaveURL('/tablero')
+})
+
+// ---------------------------------------------------------------------------
+// test_hoy_uses_last_inventory_at_when_available
+// ---------------------------------------------------------------------------
+
+test('test_hoy_uses_last_inventory_at_when_available', async ({ page }) => {
+  await injectToken(page, 'owner')
+
+  const requestedUrls: string[] = []
+
+  await page.route(SUMMARY_URL, (route) => {
+    requestedUrls.push(route.request().url())
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      // last_inventory_at is 2026-07-05 UTC (= 2026-07-04 in UTC-3 at 21:00)
+      body: JSON.stringify({ ...MOCK_SUMMARY_FULL, last_inventory_at: '2026-07-05T00:00:00Z' }),
+    })
+  })
+
+  await page.goto('/tablero')
+
+  // Wait for initial load
+  await expect(page.getByRole('region', { name: /pedidos en el periodo/i })).toBeVisible()
+
+  const countBefore = requestedUrls.length
+
+  // Click HOY
+  await page.getByRole('button', { name: /HOY/i }).click()
+
+  // Wait for new request
+  await expect(async () => {
+    expect(requestedUrls.length).toBeGreaterThan(countBefore)
+  }).toPass()
+
+  // The HOY request must use the last_inventory_at date as `from`, NOT today.
+  const latestUrl = requestedUrls[requestedUrls.length - 1]
+  const urlObj = new URL(latestUrl)
+  const fromParam = urlObj.searchParams.get('from')
+  // last_inventory_at '2026-07-05T00:00:00Z' in UTC-3 is '2026-07-04'
+  expect(fromParam).toBe('2026-07-04')
+})
+
+// ---------------------------------------------------------------------------
+// test_hoy_falls_back_to_today_when_no_inventory
+// ---------------------------------------------------------------------------
+
+test('test_hoy_falls_back_to_today_when_no_inventory', async ({ page }) => {
+  await injectToken(page, 'owner')
+
+  const requestedUrls: string[] = []
+
+  await page.route(SUMMARY_URL, (route) => {
+    requestedUrls.push(route.request().url())
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ...MOCK_SUMMARY_FULL, last_inventory_at: null }),
+    })
+  })
+
+  await page.goto('/tablero')
+
+  await expect(page.getByRole('region', { name: /pedidos en el periodo/i })).toBeVisible()
+
+  const countBefore = requestedUrls.length
+
+  await page.getByRole('button', { name: /HOY/i }).click()
+
+  await expect(async () => {
+    expect(requestedUrls.length).toBeGreaterThan(countBefore)
+  }).toPass()
+
+  // Without last_inventory_at, from must equal today (YYYY-MM-DD pattern, both equal)
+  const latestUrl = requestedUrls[requestedUrls.length - 1]
+  const urlObj = new URL(latestUrl)
+  const fromParam = urlObj.searchParams.get('from')
+  const toParam = urlObj.searchParams.get('to')
+  // Both must be the same date when falling back to today
+  expect(fromParam).toBe(toParam)
+})
+
+// ---------------------------------------------------------------------------
+// test_summary_query_scoped_by_user_id
+// ---------------------------------------------------------------------------
+
+test('test_summary_query_scoped_by_user_id', async ({ page }) => {
+  // Two different users must not share cached data.
+  // We verify that after injecting a second token, a fresh request is issued.
+  const requestedUrls: string[] = []
+
+  await page.route(SUMMARY_URL, (route) => {
+    requestedUrls.push(route.request().url())
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(MOCK_SUMMARY_FULL),
+    })
+  })
+
+  // First user
+  const tokenA = makeTestJwt('owner', 3600, 'user-a')
+  await page.goto('/login')
+  await page.evaluate((t) => {
+    sessionStorage.setItem('cocina-auth', JSON.stringify({ state: { token: t }, version: 0 }))
+  }, tokenA)
+
+  await page.goto('/tablero')
+  await expect(page.getByRole('region', { name: /pedidos en el periodo/i })).toBeVisible()
+  const urlsAfterUserA = requestedUrls.length
+  expect(urlsAfterUserA).toBeGreaterThan(0)
+
+  // Switch to second user — different sub claim
+  const tokenB = makeTestJwt('owner', 3600, 'user-b')
+  await page.evaluate((t) => {
+    sessionStorage.setItem('cocina-auth', JSON.stringify({ state: { token: t }, version: 0 }))
+  }, tokenB)
+
+  await page.goto('/tablero')
+  await expect(page.getByRole('region', { name: /pedidos en el periodo/i })).toBeVisible()
+
+  // A second request must have been issued — data was not served from user-a's cache
+  expect(requestedUrls.length).toBeGreaterThan(urlsAfterUserA)
 })

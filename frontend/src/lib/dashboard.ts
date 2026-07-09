@@ -7,9 +7,14 @@ import type { DashboardSummary, TraceabilityEvent } from './types'
 // Fetch helpers
 // ---------------------------------------------------------------------------
 
-async function fetchDashboardSummary(from: string, to: string): Promise<DashboardSummary> {
+async function fetchDashboardSummary(
+  from: string,
+  to: string,
+  signal?: AbortSignal,
+): Promise<DashboardSummary> {
   const response = await apiClient.get<DashboardSummary>('/dashboard/summary', {
     params: { from, to },
+    signal,
   })
   return response.data
 }
@@ -18,10 +23,11 @@ async function fetchTraceability(
   productId: string,
   from: string,
   to: string,
+  signal?: AbortSignal,
 ): Promise<TraceabilityEvent[]> {
   const response = await apiClient.get<TraceabilityEvent[]>(
     `/dashboard/traceability/${productId}`,
-    { params: { from, to } },
+    { params: { from, to }, signal },
   )
   return response.data
 }
@@ -30,22 +36,38 @@ async function fetchTraceability(
 // Hooks
 // ---------------------------------------------------------------------------
 
-export function useDashboardSummary(from: string, to: string) {
+export function useDashboardSummary(userId: string | null, from: string, to: string) {
   return useQuery({
-    queryKey: ['dashboard-summary', from, to],
-    queryFn: () => fetchDashboardSummary(from, to),
+    queryKey: ['dashboard-summary', userId, from, to],
+    queryFn: ({ signal }) => fetchDashboardSummary(from, to, signal),
     staleTime: 0,
     networkMode: 'offlineFirst',
   })
 }
 
-export function useTraceability(productId: string, from: string, to: string) {
+export function useTraceability(
+  userId: string | null,
+  productId: string,
+  from: string,
+  to: string,
+) {
   return useQuery({
-    queryKey: ['dashboard-traceability', productId, from, to],
-    queryFn: () => fetchTraceability(productId, from, to),
+    queryKey: ['dashboard-traceability', userId, productId, from, to],
+    queryFn: ({ signal }) => fetchTraceability(productId, from, to, signal),
     staleTime: 0,
     networkMode: 'offlineFirst',
   })
+}
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+export class CsvAuthError extends Error {
+  constructor() {
+    super('CSV download failed: 401')
+    this.name = 'CsvAuthError'
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -59,12 +81,22 @@ export async function downloadCsv(
   type: 'all' | 'delivery' | 'order' | 'count' = 'all',
 ): Promise<void> {
   const token = useAuth.getState().token
+
+  // Fail early if there is no token — avoids a 401 round-trip.
+  if (!token) {
+    throw new CsvAuthError()
+  }
+
   const baseUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
   const url = `${baseUrl}/api/v1/dashboard/export?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&type=${type}`
 
   const response = await fetch(url, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: { Authorization: `Bearer ${token}` },
   })
+
+  if (response.status === 401) {
+    throw new CsvAuthError()
+  }
 
   if (!response.ok) {
     throw new Error(`CSV download failed: ${response.status}`)

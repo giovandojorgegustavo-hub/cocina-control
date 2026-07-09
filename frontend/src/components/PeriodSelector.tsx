@@ -69,22 +69,42 @@ export function PeriodSelector({
       </div>
 
       {preset === 'custom' && (
-        <div className="flex items-center gap-2 flex-wrap">
-          <input
-            type="date"
-            value={customFrom}
-            onChange={(e) => onCustomFrom(e.target.value)}
-            className="border border-gray-300 rounded px-2 py-1 text-sm min-h-[44px]"
-            aria-label="Fecha desde"
-          />
-          <span className="text-gray-500 text-sm">al</span>
-          <input
-            type="date"
-            value={customTo}
-            onChange={(e) => onCustomTo(e.target.value)}
-            className="border border-gray-300 rounded px-2 py-1 text-sm min-h-[44px]"
-            aria-label="Fecha hasta"
-          />
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <input
+              type="date"
+              value={customFrom}
+              onChange={(e) => {
+                const newFrom = e.target.value
+                // If the new "from" would be after "to", move "to" forward to match.
+                if (newFrom > customTo) {
+                  onCustomTo(newFrom)
+                }
+                onCustomFrom(newFrom)
+              }}
+              className="border border-gray-300 rounded px-2 py-1 text-sm min-h-[44px]"
+              aria-label="Fecha desde"
+            />
+            <span className="text-gray-500 text-sm">al</span>
+            <input
+              type="date"
+              value={customTo}
+              min={customFrom}
+              onChange={(e) => {
+                const newTo = e.target.value
+                // Reject: "to" cannot be before "from".
+                if (newTo < customFrom) return
+                onCustomTo(newTo)
+              }}
+              className="border border-gray-300 rounded px-2 py-1 text-sm min-h-[44px]"
+              aria-label="Fecha hasta"
+            />
+          </div>
+          {customFrom > customTo && (
+            <p role="alert" className="text-xs text-red-600">
+              El &apos;desde&apos; debe ser anterior al &apos;hasta&apos;.
+            </p>
+          )}
         </div>
       )}
 

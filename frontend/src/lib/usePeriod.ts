@@ -27,11 +27,33 @@ function addDays(base: string, delta: number): string {
   return `${yr}-${mo}-${dy}`
 }
 
-function rangeFor(preset: PeriodPreset, custom: { from: string; to: string }) {
+/**
+ * Converts an ISO 8601 UTC timestamp to a YYYY-MM-DD date string in UTC-3.
+ */
+function isoToArgentinaDate(isoUtc: string): string {
+  const OFFSET_MS = 3 * 60 * 60 * 1000
+  const local = new Date(new Date(isoUtc).getTime() - OFFSET_MS)
+  const y = local.getUTCFullYear()
+  const m = String(local.getUTCMonth() + 1).padStart(2, '0')
+  const d = String(local.getUTCDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+function rangeFor(
+  preset: PeriodPreset,
+  custom: { from: string; to: string },
+  lastInventoryAt: string | null,
+) {
   const today = todayArgentina()
   switch (preset) {
     case 'today':
-      return { from: today, to: today }
+      // Wireframe: "HOY = desde el último inventario hasta ahora."
+      // If last_inventory_at is known, use its date as the from boundary.
+      // Fallback: from=today when no inventory has been recorded yet.
+      return {
+        from: lastInventoryAt ? isoToArgentinaDate(lastInventoryAt) : today,
+        to: today,
+      }
     case '7d':
       return { from: addDays(today, -6), to: today }
     case '30d':
@@ -52,7 +74,10 @@ interface PeriodState {
   setCustomTo: (v: string) => void
 }
 
-export function usePeriod(defaultPreset: PeriodPreset = '7d'): PeriodState {
+export function usePeriod(
+  defaultPreset: PeriodPreset = '7d',
+  lastInventoryAt: string | null = null,
+): PeriodState {
   const today = todayArgentina()
   const [preset, setPresetState] = useState<PeriodPreset>(defaultPreset)
   const [customFrom, setCustomFrom] = useState<string>(addDays(today, -6))
@@ -62,7 +87,7 @@ export function usePeriod(defaultPreset: PeriodPreset = '7d'): PeriodState {
     setPresetState(p)
   }, [])
 
-  const range = rangeFor(preset, { from: customFrom, to: customTo })
+  const range = rangeFor(preset, { from: customFrom, to: customTo }, lastInventoryAt)
 
   return {
     preset,

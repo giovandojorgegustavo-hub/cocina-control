@@ -1,11 +1,17 @@
 import { useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
-import { useDashboardSummary, useTraceability, downloadCsv } from '../lib/dashboard'
+import { useNavigate, useParams, Navigate } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
+import { useAuthWithGetters } from '../lib/auth'
+import { useDashboardSummary, useTraceability, downloadCsv, CsvAuthError } from '../lib/dashboard'
 import { usePeriod } from '../lib/usePeriod'
 import { PeriodSelector } from '../components/PeriodSelector'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { formatRelativeDate } from '../lib/date'
 import type { TraceabilityEvent } from '../lib/types'
+
+// UUID v4 validation — prevents using arbitrary strings as path params in API calls.
+const UUID_V4_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 // ---------------------------------------------------------------------------
 // Skeleton
@@ -171,47 +177,68 @@ function EventsTable({ events }: EventsTableProps) {
 export function Trazabilidad() {
   const { productId } = useParams<{ productId: string }>()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const { userId, clearToken } = useAuthWithGetters()
+
+  // Guard: productId must be a valid UUID v4. Anything else redirects to /tablero
+  // to prevent arbitrary strings from reaching the API as path segments.
+  if (!UUID_V4_RE.test(productId ?? '')) {
+    return <Navigate to="/tablero" replace />
+  }
 
   const period = usePeriod('7d')
-  const safeProductId = productId ?? ''
+  // productId is now guaranteed to be a valid UUID
+  const safeProductId = productId as string
 
   // We need the summary to get product metadata (name, stock_now, consumption)
   const {
     data: summaryData,
     isLoading: summaryLoading,
-  } = useDashboardSummary(period.from, period.to)
+    refetch: summaryRefetch,
+  } = useDashboardSummary(userId, period.from, period.to)
 
   const {
     data: events,
     isLoading: eventsLoading,
     isError,
-    refetch,
-  } = useTraceability(safeProductId, period.from, period.to)
+    refetch: traceRefetch,
+  } = useTraceability(userId, safeProductId, period.from, period.to)
 
   const [showError, setShowError] = useState(true)
+  const [csvError, setCsvError] = useState<string | null>(null)
   const [csvLoading, setCsvLoading] = useState(false)
 
   const isLoading = summaryLoading || eventsLoading
 
   // Find product metadata from summary
   const productMeta = summaryData?.products.find((p) => p.product_id === safeProductId)
-  const productName = productMeta?.name ?? safeProductId.toUpperCase()
+  // If not found after load, show a human-readable label instead of the raw UUID.
+  const productName = productMeta?.name ?? (summaryLoading ? '...' : 'Producto no encontrado')
   const stockNow = productMeta?.stock_now
   const stockUnit = productMeta?.unit ?? ''
   const consumption = productMeta?.consumption
   const consumptionAvailable = productMeta?.consumption_available ?? false
 
+  // Retry both queries so the user does not have to retry individually.
   function handleRetry() {
     setShowError(true)
-    void refetch()
+    void summaryRefetch()
+    void traceRefetch()
   }
 
   async function handleDownloadCsv() {
     setCsvLoading(true)
+    setCsvError(null)
     try {
       await downloadCsv(period.from, period.to, 'all')
-    } catch {
-      // best-effort
+    } catch (err) {
+      if (err instanceof CsvAuthError) {
+        clearToken()
+        queryClient.clear()
+        navigate('/login', { replace: true })
+        return
+      }
+      setCsvError('No se pudo descargar el CSV. Proba de nuevo.')
     } finally {
       setCsvLoading(false)
     }
@@ -314,6 +341,13 @@ export function Trazabilidad() {
             )
           )}
         </section>
+
+        {/* CSV error banner */}
+        {csvError && (
+          <div role="alert" className="bg-orange-100 border border-orange-300 text-orange-800 text-sm rounded px-4 py-3">
+            {csvError}
+          </div>
+        )}
 
         {/* Actions */}
         <div className="flex gap-3 mt-2">

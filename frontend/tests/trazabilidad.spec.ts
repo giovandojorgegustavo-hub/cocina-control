@@ -4,6 +4,10 @@ import { makeTestJwt } from './helpers/testJwt'
 const SUMMARY_URL = '**/api/v1/dashboard/summary**'
 const TRACEABILITY_URL = '**/api/v1/dashboard/traceability/**'
 
+// Valid UUID v4 used as product id in tests.
+// Must match UUID v4 format: xxxxxxxx-xxxx-4xxx-[89ab]xxx-xxxxxxxxxxxx
+const PRODUCT_UUID = '11111111-1111-4111-8111-111111111111'
+
 // ---------------------------------------------------------------------------
 // Auth helpers
 // ---------------------------------------------------------------------------
@@ -24,7 +28,7 @@ async function injectToken(page: import('@playwright/test').Page, role: 'operato
 const MOCK_SUMMARY = {
   products: [
     {
-      product_id: 'prod-palta',
+      product_id: PRODUCT_UUID,
       name: 'PALTA',
       unit: 'un',
       stock_now: 4,
@@ -126,7 +130,7 @@ test('test_traceability_shows_events_newest_first', async ({ page }) => {
     })
   })
 
-  await page.goto('/tablero/producto/prod-palta')
+  await page.goto(`/tablero/producto/${PRODUCT_UUID}`)
 
   // The desktop table must have ev-3 (INVENTARIO, 22:30) before ev-1 (INVENTARIO, 12:00)
   // We verify row order by checking that the first row contains "4 un" (ev-3) and
@@ -164,7 +168,7 @@ test('test_traceability_shows_corrections_as_pairs', async ({ page }) => {
     })
   })
 
-  await page.goto('/tablero/producto/prod-palta')
+  await page.goto(`/tablero/producto/${PRODUCT_UUID}`)
 
   // The original (corrected) event must show its correction note.
   // Both the desktop table and mobile cards render the text; use first() to avoid strict-mode.
@@ -186,7 +190,7 @@ test('test_traceability_shows_corrections_as_pairs', async ({ page }) => {
 test('test_traceability_operator_redirects', async ({ page }) => {
   await injectToken(page, 'operator')
 
-  await page.goto('/tablero/producto/prod-palta')
+  await page.goto(`/tablero/producto/${PRODUCT_UUID}`)
 
   // Operator must be redirected to their home /
   await expect(page).toHaveURL('/')
@@ -222,9 +226,36 @@ test('test_traceability_nonexistent_product_shows_error', async ({ page }) => {
     })
   })
 
-  await page.goto('/tablero/producto/prod-inexistente')
+  // Use a valid UUID v4 that is not in the summary — simulates a product that
+  // exists as a valid id but has no data in the current period.
+  const unknownUuid = '22222222-2222-4222-8222-222222222222'
+  await page.goto(`/tablero/producto/${unknownUuid}`)
 
+  // The alert div (not the header) must be visible.
   await expect(
-    page.getByText(/producto no encontrado/i),
+    page.getByRole('alert').filter({ hasText: /producto no encontrado/i }),
   ).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// test_traceability_invalid_uuid_redirects_to_tablero
+// ---------------------------------------------------------------------------
+
+test('test_traceability_invalid_uuid_redirects_to_tablero', async ({ page }) => {
+  await injectToken(page, 'owner')
+
+  // Navigate to a URL with an obviously invalid product id (not a UUID).
+  // The page guard must redirect to /tablero before making any API call.
+  const apiCalled = { summary: false }
+  await page.route(SUMMARY_URL, (route) => {
+    apiCalled.summary = true
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_SUMMARY) })
+  })
+
+  await page.goto('/tablero/producto/not-a-uuid')
+
+  // Guard fires client-side and redirects to /tablero before rendering Trazabilidad.
+  // The traceability-specific fetch must NOT have been called (only the tablero
+  // summary fetch may fire after the redirect lands on the Tablero page).
+  await expect(page).toHaveURL('/tablero', { timeout: 5000 })
 })

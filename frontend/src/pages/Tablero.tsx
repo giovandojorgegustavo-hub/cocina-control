@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { useAuthWithGetters } from '../lib/auth'
 import { apiClient } from '../lib/api'
-import { useDashboardSummary, downloadCsv } from '../lib/dashboard'
+import { useDashboardSummary, downloadCsv, CsvAuthError } from '../lib/dashboard'
 import { usePeriod } from '../lib/usePeriod'
 import { PeriodSelector } from '../components/PeriodSelector'
 import { Semaforo, stockLevel } from '../components/Semaforo'
@@ -89,7 +89,7 @@ function LowStockWidget({ items, onVerTodos }: LowStockWidgetProps) {
           })}
         </ul>
       )}
-      {items.length > 0 && (
+      {items.length > 5 && (
         <button
           onClick={onVerTodos}
           className="mt-1 text-xs text-gray-500 underline text-left min-h-[44px] flex items-center"
@@ -348,30 +348,89 @@ function EmptyState({ onPreset }: { onPreset: (p: 'today' | '7d' | '30d') => voi
 // Page
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Offline banner with stale data timestamp
+// ---------------------------------------------------------------------------
+
+interface OfflineStaleBannerProps {
+  dataUpdatedAt: number
+}
+
+function OfflineStaleBanner({ dataUpdatedAt }: OfflineStaleBannerProps) {
+  const minutesAgo = Math.round((Date.now() - dataUpdatedAt) / 60_000)
+  const label =
+    minutesAgo < 1
+      ? 'hace menos de un minuto'
+      : minutesAgo === 1
+        ? 'hace 1 min'
+        : `hace ${minutesAgo} min`
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="bg-orange-500 text-white text-sm font-medium px-4 py-3 text-center"
+    >
+      Sin conexion — mostrando datos guardados (ultima sync: {label})
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
+
 export function Tablero() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const { userId } = useAuthWithGetters()
+  const { userId, clearToken } = useAuthWithGetters()
 
-  const period = usePeriod('7d')
-  const { data, isLoading, isError, refetch } = useDashboardSummary(period.from, period.to)
+  // usePeriod needs last_inventory_at to compute the "HOY" range correctly.
+  // We seed it from the summary response once it arrives.
+  const [lastInventoryAt, setLastInventoryAt] = useState<string | null>(null)
+  const period = usePeriod('7d', lastInventoryAt)
+
+  const {
+    data,
+    isLoading,
+    isError,
+    refetch: summaryRefetch,
+    dataUpdatedAt,
+  } = useDashboardSummary(userId, period.from, period.to)
+
+  // Sync last_inventory_at from summary so "HOY" re-computes after first load.
+  if (data?.last_inventory_at && data.last_inventory_at !== lastInventoryAt) {
+    setLastInventoryAt(data.last_inventory_at)
+  }
 
   const [showError, setShowError] = useState(true)
+  const [csvError, setCsvError] = useState<string | null>(null)
   const [filterLowStock, setFilterLowStock] = useState(false)
   const [csvLoading, setCsvLoading] = useState(false)
 
-  // Reset error banner each time a new error arrives
+  const isOfflineWithData = !navigator.onLine && data !== undefined && dataUpdatedAt > 0
+
+  // Reset error banner each time a new error arrives.
+  // Retry both summary (traceability is not on this page).
   function handleRetry() {
     setShowError(true)
-    void refetch()
+    void summaryRefetch()
   }
 
   async function handleDownloadCsv() {
     setCsvLoading(true)
+    setCsvError(null)
     try {
       await downloadCsv(period.from, period.to, 'all')
-    } catch {
-      // best-effort: no UI error for CSV — the download either works or fails silently
+    } catch (err) {
+      if (err instanceof CsvAuthError) {
+        // Token expired or missing — clear session and redirect to login.
+        clearToken()
+        queryClient.clear()
+        navigate('/login', { replace: true })
+        return
+      }
+      setCsvError('No se pudo descargar el CSV. Proba de nuevo.')
     } finally {
       setCsvLoading(false)
     }
@@ -397,6 +456,9 @@ export function Tablero() {
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-50">
+      {/* Offline banner — shown at the top when offline and stale data is cached */}
+      {isOfflineWithData && <OfflineStaleBanner dataUpdatedAt={dataUpdatedAt} />}
+
       {/* Header */}
       <header className="bg-gray-900 text-white px-4 py-4 flex items-center justify-between flex-shrink-0">
         <h1 className="text-lg font-bold tracking-wide">Cocina Control — Tablero</h1>
@@ -465,6 +527,13 @@ export function Tablero() {
               onRowClick={(productId) => navigate(`/tablero/producto/${productId}`)}
               filterLowStock={filterLowStock}
             />
+
+            {/* CSV error banner */}
+            {csvError && (
+              <div role="alert" className="bg-orange-100 border border-orange-300 text-orange-800 text-sm rounded px-4 py-3">
+                {csvError}
+              </div>
+            )}
 
             {/* Actions */}
             <div className="flex flex-wrap gap-3 mt-2">
