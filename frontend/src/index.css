@@ -3,7 +3,9 @@
 @tailwind utilities;
 
 /* Minimum touch target: 48x48px per WCAG 2.5.5 */
-button, a, [role="button"] {
+/* <a> intentionally excluded — inline links should not be forced to 48px block size.
+   Use Tailwind classes min-h-[48px] min-w-[48px] on anchor-based touch targets explicitly. */
+button, [role="button"] {
   min-height: 48px;
   min-width: 48px;
 }

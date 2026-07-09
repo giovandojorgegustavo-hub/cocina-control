@@ -12,6 +12,7 @@ export default defineConfig({
         name: 'Cocina Control',
         short_name: 'Cocina',
         description: 'Control de inventario para dark kitchen',
+        lang: 'es',
         theme_color: '#111827',
         background_color: '#ffffff',
         display: 'standalone',
@@ -28,10 +29,19 @@ export default defineConfig({
             sizes: '512x512',
             type: 'image/png',
           },
+          {
+            src: 'icons/icon-512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable',
+          },
         ],
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
+        // IMPORTANTE: las llamadas a /api/** NO se cachean por diseño.
+        // Los datos sensibles del dominio (inventario, auditoría) deben venir siempre del servidor.
+        // No agregar runtimeCaching para /api sin revisión de seguridad.
       },
     }),
   ],

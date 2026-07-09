@@ -6,9 +6,9 @@ test('login page renders', async ({ page }) => {
 })
 
 test('home redirects to login without token', async ({ page }) => {
-  // Navigate to the origin first so localStorage is accessible, then clear it
+  // Navigate to origin first so sessionStorage is accessible, then clear it
   await page.goto('/login')
-  await page.evaluate(() => localStorage.clear())
+  await page.evaluate(() => sessionStorage.clear())
 
   await page.goto('/')
   await expect(page).toHaveURL(/\/login/)

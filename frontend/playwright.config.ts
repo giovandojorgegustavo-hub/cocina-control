@@ -18,7 +18,9 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: process.env.CI ? 'npm run preview -- --port 5173' : 'npm run dev',
+    // Always run against the production build so manifest.webmanifest and SW
+    // are available at their real paths (vite-plugin-pwa generates them at build time).
+    command: 'npm run build && npm run preview -- --port 5173',
     url: 'http://localhost:5173',
     reuseExistingServer: !process.env.CI,
     timeout: 120 * 1000,
