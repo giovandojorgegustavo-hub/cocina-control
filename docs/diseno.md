@@ -184,21 +184,38 @@ Qué significa en la práctica: el CSV es la fuente forense completa. Muestra to
 
 | Capa | Tecnología elegida | Rol |
 |---|---|---|
-| Backend / API | Go + Chi (enrutador HTTP ligero) | Servidor que recibe las llamadas de la app y aplica la lógica de negocio |
+| Backend / API | FastAPI (Python) | Servidor que recibe las llamadas de la app y aplica la lógica de negocio |
+| ORM y migraciones | SQLAlchemy 2 + Alembic | Mapeo de modelos a tablas y versionado de cambios de esquema |
+| Validación | Pydantic v2 | Validación de inputs y serialización de respuestas |
 | Base de datos | PostgreSQL | Almacena todos los registros de eventos, usuarios, productos |
-| Almacenamiento de fotos | Bucket S3-compatible (Cloudflare R2 en v0.1) | Guarda los archivos de imagen de los pedidos |
+| Almacenamiento de fotos | Filesystem local del droplet | Guarda los archivos de imagen de los pedidos en el servidor propio |
+| Reverse proxy | Nginx | Termina HTTPS, sirve archivos estáticos (fotos), enruta tráfico al proceso FastAPI |
+| Proceso en producción | systemd | Mantiene el proceso FastAPI corriendo y lo reinicia si falla |
+| Hosting | Droplet DigitalOcean (propio del dueño) | Servidor dedicado bajo control total del dueño |
 | Forma de servir la API | REST sobre HTTPS | Protocolo de comunicación entre la app y el servidor |
-| Hosting | Railway (backend + base de datos) | Dónde corre el servidor; Railway maneja la infraestructura |
+| Testing | pytest | Tests unitarios y de integración |
+| Lint | ruff | Análisis estático y formateo de código Python |
+| Gestión de dependencias | uv | Instalación y lockfile de paquetes Python |
 
 ### 3.b. Justificación por capa
 
-**Go + Chi**
+**FastAPI (Python)**
 
-Go es un lenguaje compilado que arranca rápido y consume poca memoria. Para un sistema de 4 operarios con picos cortos de tráfico, eso se traduce en que el servidor puede vivir en el plan más barato de Railway sin ahogarse. Chi es un enrutador HTTP minimalista y estable — no es un framework grande con magia propia, lo que hace que el código sea predecible y fácil de mantener por alguien que recién entra al proyecto.
+FastAPI es el framework Python de mayor adopción para APIs REST en los últimos años. El dueño ya opera con este ecosistema; elegirlo significa que cualquier desarrollador que el dueño incorpore va a reconocer el código desde el primer día. FastAPI genera automáticamente documentación OpenAPI/Swagger disponible en `/docs` — el equipo de frontend puede ver todos los contratos de la API en vivo, sin documentación separada que se desactualice.
 
-Alternativa descartada: Node.js con Express. Node.js es más conocido y tiene más ecosistema, pero para este dominio (operaciones de base de datos, lógica de negocio, poco cómputo en memoria) Go produce un ejecutable más pequeño y predecible sin sacrificar nada. El dueño no tiene equipo técnico interno, así que "más ecosistema" no es una ventaja real aquí; "más fácil de hostear barato" sí lo es.
+Alternativa descartada: Django + Django REST Framework (DRF). Django es un framework completo (ORM propio, admin, plantillas, autenticación integrada) diseñado para aplicaciones web tradicionales. Para una API pura, ese peso extra es una desventaja: más configuración inicial, más capas de abstracción, y una curva de entrada más alta para quien venga después. FastAPI hace exactamente lo que necesita este proyecto — servir una API JSON con validación fuerte y documentación automática — sin la superficie de Django que no se va a usar.
 
-Qué significa en la práctica: el servidor es un único archivo ejecutable. Arranca en menos de un segundo. No hay que instalar Python, Node, Ruby ni ningún runtime — solo correr el binario.
+Qué significa en la práctica: el dueño (o quien contrate) puede incorporar un desarrollador Python sin necesidad de re-aprender el stack. La documentación de la API está disponible en el servidor en `/docs` sin trabajo adicional.
+
+**SQLAlchemy 2 + Alembic**
+
+SQLAlchemy 2 es el ORM estándar del ecosistema Python: define los modelos como clases Python y los traduce a SQL de forma predecible. Alembic es su compañero de migraciones — cada cambio de esquema queda versionado como un archivo en `migrations/`, se puede aplicar (`alembic upgrade head`) o revertir (`alembic downgrade`).
+
+Qué significa en la práctica: ningún cambio de estructura de la base de datos se aplica a mano. Todo queda en código, en git, con historial. Si algo sale mal al desplegar, se revierte con un comando.
+
+**Pydantic v2**
+
+Valida los datos que entran por la API (tipos, formatos, longitudes) y serializa lo que sale. FastAPI lo usa internamente; el contrato de cada endpoint queda expresado como una clase Python que funciona como documentación ejecutable.
 
 **PostgreSQL**
 
@@ -206,23 +223,17 @@ Base de datos relacional madura, con soporte nativo para transacciones (operacio
 
 Qué significa en la práctica: si el servidor se cae en el medio de una validación, la base de datos vuelve al estado anterior limpio. No quedan datos a medias.
 
-**Cloudflare R2 (almacenamiento de fotos)**
+**Nginx + systemd + droplet DigitalOcean**
 
-R2 es un almacenamiento de archivos compatible con el protocolo S3 (el estándar de la industria) pero sin costo de transferencia de salida. Para un sistema que tiene que servir fotos al tablero del dueño, el costo de "descargar" las fotos del servidor puede crecer. R2 lo evita.
+El droplet es el servidor que ya opera el dueño: hardware dedicado, sin sorpresas de facturación por tráfico, sin límites de plan administrado. Nginx actúa como reverse proxy: recibe las conexiones HTTPS, termina el SSL, y reenvía las llamadas a la API al proceso FastAPI que corre internamente. También sirve las fotos como archivos estáticos (con validación de autenticación antes de cada archivo — ver sección 5). systemd es el administrador de procesos del sistema operativo Linux; se encarga de arrancar FastAPI al bootear el servidor y de reiniciarlo si falla.
 
-Qué significa en la práctica: guardar y mostrar fotos no genera costos variables por cantidad de veces que se miren. El dueño puede revisar el tablero 100 veces por día sin que el costo suba.
+Qué significa en la práctica: el servidor es infraestructura propia. El dueño no depende de ninguna plataforma gestionada. No hay facturación variable, no hay límites de plan, no hay vendor lock-in. Si algo falla, se conecta al droplet por SSH y se revisa directamente.
 
 **REST sobre HTTPS**
 
-REST (Representational State Transfer) es el estilo de API más utilizado y documentado. Cada acción tiene una URL y un método HTTP (GET para leer, POST para crear, etc.). Frontend lo consume con cualquier librería estándar.
+REST (Representational State Transfer) es el estilo de API más utilizado y documentado. Cada acción tiene una URL y un método HTTP (GET para leer, POST para crear, etc.). Frontend lo consume con cualquier librería estándar. FastAPI genera la especificación OpenAPI automáticamente — el equipo de frontend accede a `/docs` para ver todos los endpoints, los campos requeridos, y los códigos de respuesta posibles, sin necesidad de un documento separado.
 
-Qué significa en la práctica: la app del operario y el tablero del dueño hablan con el mismo servidor usando el mismo protocolo. No hay tecnología especial que aprender para conectar las partes.
-
-**Railway**
-
-Plataforma de hosting que maneja el servidor y la base de datos sin requerir conocimientos de infraestructura. El dueño no necesita entender qué es un servidor Linux, un balanceador de carga ni un certificado SSL — Railway los gestiona. El plan Starter cubre el volumen de este sistema holgadamente.
-
-Qué significa en la práctica: si el servidor se cae, Railway lo reinicia solo. El dueño no recibe una llamada a las 3 AM.
+Qué significa en la práctica: la app del operario y el tablero del dueño hablan con el mismo servidor usando el mismo protocolo. La documentación de la API vive en el propio servidor y refleja el código real.
 
 ---
 
@@ -306,7 +317,7 @@ Cuando el operario confirma una cantidad igual a la anunciada, `received_qty = a
 |---|---|---|
 | id | UUID | Identificador único |
 | status | TEXT | `pending` (solo foto) o `completed` |
-| photo_url | TEXT | URL de la foto en R2 |
+| photo_url | TEXT | Ruta del archivo de foto en el filesystem del droplet |
 | photo_at | TIMESTAMPTZ | Momento en que se sacó la foto |
 | photo_by | UUID | Operario que sacó la foto |
 | completed_at | TIMESTAMPTZ | Momento en que se completó el detalle; nulo si no |
@@ -398,38 +409,42 @@ products <--- referenciado por delivery_items, delivery_order_items, inventory_c
 
 ### 5.a. Cómo se suben
 
-El frontend comprime la foto en el dispositivo antes de enviarla (JPEG, calidad adaptativa, techo de 800 KB). La subida se hace en dos pasos:
+El frontend comprime la foto en el dispositivo antes de enviarla (JPEG, calidad adaptativa, techo de 800 KB). La subida se hace directamente al backend en un único paso:
 
-1. El frontend pide al backend una URL firmada de subida (`POST /api/v1/delivery-orders/{id}/photo-upload-url`).
-2. El frontend sube la foto directamente a R2 usando esa URL firmada, sin pasar por el servidor Go. Esto evita que el servidor tenga que manejar archivos grandes.
+1. El frontend envía la foto al endpoint `POST /api/v1/delivery-orders/{id}/photo` como multipart/form-data.
+2. El backend valida el JWT, guarda el archivo en el filesystem del droplet, y registra la ruta en la base de datos.
 
 Límites:
-- Tamaño máximo aceptado por R2: 2 MB (el backend firma la URL con ese límite).
+- Tamaño máximo aceptado por el servidor: 2 MB (configurado en Nginx y validado en FastAPI).
 - Formatos aceptados: JPEG y PNG.
-- Si la subida falla (sin conexión), el frontend guarda la foto localmente y reintenta cuando vuelve la red. El registro del pedido ya existe en la base de datos; solo le falta la URL de la foto.
+- Si la subida falla (sin conexión), el frontend guarda la foto localmente y reintenta cuando vuelve la red. El registro del pedido ya existe en la base de datos; solo le falta la ruta de la foto.
 
 ### 5.b. Dónde se guardan
 
-En Cloudflare R2, en un bucket privado (no público). Las fotos no son accesibles con una URL directa; para verlas hay que pasar por el backend, que verifica que el usuario sea dueño o sea el operario que creó el pedido antes de generar una URL firmada de lectura con expiración de 15 minutos.
+En el filesystem local del droplet, en la ruta `/var/lib/cocina-control/photos/{año}/{mes}/{uuid}.jpg`. El directorio no es público; Nginx no expone esa ruta directamente. Para acceder a una foto, la solicitud pasa primero por FastAPI, que valida el JWT y verifica que el usuario sea dueño o el operario que creó el pedido. Si la validación pasa, FastAPI responde con un header `X-Accel-Redirect` que le indica a Nginx que sirva el archivo internamente. El archivo nunca viaja dos veces por la red.
 
-Qué significa en la práctica: nadie puede ver las fotos si no está logueado en el sistema. Una URL copiada de la barra del navegador no funciona después de 15 minutos.
+Qué significa en la práctica: nadie puede ver las fotos si no está logueado en el sistema. La URL de una foto no funciona sin un token válido. El servicio de las fotos no tiene costo variable — están en el mismo servidor que ya paga el dueño.
 
 ### 5.c. Cómo se sirven al dueño en el tablero
 
-El tablero del dueño solicita la lista de pedidos. Cada pedido incluye una URL firmada de la foto, válida por 15 minutos. El frontend la muestra como miniatura. Si el dueño quiere ver la foto en tamaño completo, el frontend pide una nueva URL firmada en ese momento.
+El tablero del dueño solicita la lista de pedidos. Cada pedido incluye la URL del endpoint de foto (`/api/v1/delivery-orders/{id}/photo`). El frontend la usa como `src` de la imagen; el navegador envía el JWT automáticamente y recibe el archivo. Si el dueño quiere ver la foto en tamaño completo, accede al mismo endpoint — no hay URL separada que expire.
+
+Qué significa en la práctica: las fotos se cargan tan rápido como la conexión del droplet lo permita. No hay expiración de links ni necesidad de refrescar URLs.
 
 ### 5.d. Retención y backup
 
-- Retención activa: 90 días mínimo (a confirmar con el dueño; ver Pregunta 8).
-- Después de 90 días, las fotos pueden archivarse en un tier más barato de R2 (Infrequent Access) en vez de borrarse, si el dueño quiere conservarlas.
+- Retención activa: 90 días mínimo (a confirmar con el dueño; ver Pregunta 8). Un job nocturno de cron elimina los archivos cuyo `created_at` supere el período configurado.
+- Backup de fotos: rsync nocturno del directorio `/var/lib/cocina-control/photos/` a un segundo volumen del droplet o a un servicio externo de almacenamiento (DigitalOcean Spaces o similar). Como mínimo, el snapshot semanal del droplet cubre las fotos junto con todo lo demás.
 - Los metadatos del pedido (quién, cuándo, qué productos) se retienen indefinidamente en PostgreSQL.
-- Railway incluye backups diarios automáticos de la base de datos. Las fotos en R2 se replican geográficamente por defecto.
+- Backup de la base de datos: `pg_dump` nocturno vía cron (ver sección 7).
 
 ---
 
 ## 6. Endpoints de la API
 
 Todas las rutas tienen prefijo `/api/v1`. Toda llamada requiere header `Authorization: Bearer {token}` salvo el login. El backend retorna JSON siempre.
+
+FastAPI genera automáticamente la especificación OpenAPI desde el código. La documentación interactiva está disponible en `/docs` (Swagger UI) y en `/redoc` (vista alternativa). El dueño o cualquier desarrollador puede explorar todos los endpoints, ver los campos requeridos y probar llamadas directamente desde el navegador, sin necesidad de un documento de API separado.
 
 Códigos de error comunes:
 - `400` — datos inválidos en el request.
@@ -473,8 +488,7 @@ Códigos de error comunes:
 |---|---|---|---|---|---|
 | GET | `/delivery-orders` | Bandeja de pedidos | `?status=pending` (opcional) | `[{id, status, photo_url, photo_at, photo_by}]` | Operario, Dueño |
 | POST | `/delivery-orders` | Crear pedido (solo registro, sin foto aún) | — | `{id, status: pending}` | Operario |
-| POST | `/delivery-orders/{id}/photo-upload-url` | Obtener URL firmada para subir foto | `{content_type, size}` | `{upload_url, expires_in}` | Operario |
-| POST | `/delivery-orders/{id}/photo-confirm` | Confirmar que la foto fue subida | `{photo_key}` | `{id, photo_url}` | Operario |
+| POST | `/delivery-orders/{id}/photo` | Subir foto del pedido | multipart/form-data (`file`) | `{id, photo_path, photo_at}` | Operario |
 | POST | `/delivery-orders/{id}/complete` | Completar pedido con lista de productos | `{items: [{product_id, quantity}]}` | `{id, status: completed, items}` | Operario |
 | POST | `/delivery-orders/{id}/cancel` | Anular un pedido pendiente | `{reason?}` | `{id, corrects_id}` | Operario, Dueño |
 | POST | `/delivery-orders/{id}/correct` | Corregir productos de un pedido terminado | `{items: [{product_id, quantity}]}` | `{new_order_id, corrects_id}` | Operario, Dueño |
@@ -500,6 +514,37 @@ Códigos de error comunes:
 ---
 
 ## 7. Notas de implementación
+
+### Operaciones en el droplet
+
+**Backup de PostgreSQL**
+
+Un job de cron ejecuta `pg_dump` cada noche y guarda el resultado comprimido en `/var/backups/cocina-control/`. El archivo tiene el timestamp en el nombre (`cocina-control_20260709_0300.sql.gz`). Se retienen los últimos 14 dumps. El backup se puede copiar también al segundo volumen del droplet o a DigitalOcean Spaces con rsync. Para restaurar: `pg_restore` apuntando al dump correspondiente.
+
+**Backup de fotos**
+
+rsync nocturno del directorio `/var/lib/cocina-control/photos/` al destino de backup configurado (segundo volumen o almacenamiento externo). El snapshot semanal del droplet actúa como red de seguridad adicional y cubre tanto la base de datos como las fotos en un mismo punto de restauración.
+
+**Monitoreo mínimo**
+
+- systemd reinicia el proceso FastAPI automáticamente si falla. El log queda en `journalctl -u cocina-control`.
+- Nginx registra accesos y errores en `/var/log/nginx/`. Un cron de logrotate evita que crezcan indefinidamente.
+- Para producción: configurar una alerta simple de uptime (UptimeRobot en plan gratuito o similar) que avise por email si el servidor no responde en más de 2 minutos.
+
+**Despliegue**
+
+El flujo de despliegue estándar es:
+
+```bash
+git pull origin main
+uv pip install -r requirements.lock
+alembic upgrade head
+systemctl restart cocina-control
+```
+
+Opcionalmente, un `Makefile` con un target `deploy` encapsula estos pasos para ejecutar con un solo comando. No se requiere CI/CD en v0.2 — el despliegue manual por SSH es suficiente para el volumen de cambios esperado.
+
+---
 
 ### Riesgos conocidos
 
