@@ -1,21 +1,23 @@
-# Registro de entrada
+# Registro de entrada (v0.2 — verificación de entregas)
 
 ## Objetivo del flujo
 
-Que el operario anote qué producto llegó y cuánto, apenas termina de descargar la compra. Sin cálculos, sin totales, sin ver lo que había antes. Sólo cuenta lo que tiene enfrente y lo tipea.
+Que el operario verifique una entrega que el dueño ya anunció, en vez de cargarla desde cero. El dueño pre-carga qué compró (productos y cantidades); el operario compara contra lo que tiene enfrente y confirma o corrige. El stock impacta recién cuando valida la entrega completa.
 
-## Usuario
+## Usuarios
 
-Operario de turno. Manos ocupadas o sucias. Tablet apoyada en la mesada o celular en el bolsillo del delantal.
+- **Dueño:** pre-carga cada entrega esperada (proveedor, productos, cantidades anunciadas) desde su panel. Esa pantalla es del tablero del dueño, no de este flujo.
+- **Operario de turno:** manos ocupadas o sucias. Tablet apoyada en la mesada o celular en el bolsillo del delantal. Verifica, no carga.
 
 ## Presupuesto
 
-- **Camino feliz:** 3 toques, menos de 5 segundos desde que abre la app.
+- **Camino feliz (llegó exactamente lo anunciado):** 1 toque por producto, menos de 2 segundos cada uno.
 - **Toque 1:** botón grande "ENTRADA" en el home.
-- **Toque 2:** selecciona el producto de la lista (grilla de tarjetas grandes).
-- **Toque 3:** tipea cantidad en teclado numérico ya abierto y toca "OK".
+- **Toque 2:** la entrega no leída en la bandeja.
+- **Toques 3..N+2:** "OK — llegó así" por cada producto (el default anunciado ya está puesto).
+- **Toque final:** "validar entrega".
 
-El teclado numérico aparece con foco automático — no cuenta como toque. La cantidad tipeada tampoco: los dígitos son parte del toque 3.
+Sólo se tipea cuando la realidad difiere de lo anunciado. Ahí el teclado numérico aparece con foco automático y el default editable.
 
 ## Home (punto de entrada común a los 3 flujos de operario)
 
@@ -28,236 +30,173 @@ Tablet horizontal (1024x768 aprox):
 |                                                              |
 |   +------------------+  +------------------+  +------------+ |
 |   |                  |  |                  |  |            | |
-|   |     ENTRADA      |  |      CIERRE      |  |   PEDIDO   | |
+|   |     ENTRADA      |  |   INVENTARIO     |  |   PEDIDO   | |
 |   |                  |  |                  |  |            | |
-|   |    (llegó algo)  |  |   (fin turno)    |  | (Rappi/PY) | |
-|   |                  |  |                  |  |            | |
+|   | (llegó una       |  |  (contar stock)  |  | (foto al   | |
+|   |     entrega)     |  |                  |  |  empacar)  | |
 |   +------------------+  +------------------+  +------------+ |
 |                                                              |
 |                                          [ver mis registros] |
 +--------------------------------------------------------------+
 ```
 
-Celular vertical (360x780 aprox):
+Los tres botones ocupan como mínimo 1/3 del alto útil. Color plano, texto en mayúsculas grandes. El "ver mis registros" es texto chico abajo — es la puerta a las correcciones posteriores.
 
-```
-+----------------------+
-| Cocina Control  Juan |
-+----------------------+
-|                      |
-| +------------------+ |
-| |                  | |
-| |     ENTRADA      | |
-| |                  | |
-| +------------------+ |
-|                      |
-| +------------------+ |
-| |                  | |
-| |     CIERRE       | |
-| |                  | |
-| +------------------+ |
-|                      |
-| +------------------+ |
-| |     PEDIDO       | |
-| +------------------+ |
-|                      |
-| [ver mis registros]  |
-+----------------------+
-```
+Celular vertical (360x780 aprox): mismos tres botones apilados, cada uno ~1/4 del alto útil.
 
-Los tres botones ocupan como mínimo 1/3 del alto útil. Color plano, texto en mayúsculas grandes. Nada más. El "ver mis registros" es texto chico abajo — es la puerta a las correcciones.
+## Pantalla 1 — Bandeja de entregas
 
-## Pantalla 1 — Selección de producto
-
-Se abre después del toque 1. Grilla de tarjetas por producto, ordenadas por uso más frecuente (más usadas arriba).
-
-Tablet horizontal:
+Se abre después del toque 1. Lista de entregas pre-cargadas por el dueño, más nuevas arriba.
 
 ```
 +--------------------------------------------------------------+
-|  <  ENTRADA — ¿qué llegó?                                    |
+|  <  ENTRADA — entregas                                       |
++--------------------------------------------------------------+
+|  +--------------------------------------------------------+  |
+|  |  VERDULERIA NUÑEZ                        [ NO LEIDO ]  |  |
+|  |  hoy 14:00  ·  8 productos                             |  |
+|  +--------------------------------------------------------+  |
+|  +--------------------------------------------------------+  |
+|  |  CARNICERIA LOPEZ  (gris)               [ validado ✓ ] |  |
+|  |  hoy 09:30  ·  3 productos                             |  |
+|  +--------------------------------------------------------+  |
+|  +--------------------------------------------------------+  |
+|  |  DISTRIBUIDORA SUR  (gris)              [ validado ✓ ] |  |
+|  |  ayer 16:45  ·  5 productos                            |  |
+|  +--------------------------------------------------------+  |
++--------------------------------------------------------------+
+```
+
+- **Estados de entrega: no leído → validado.** La entrega nueva aparece con badge oscuro "NO LEÍDO" y borde fuerte. Las validadas bajan a gris con "validado ✓".
+- Tocar una entrega no leída abre la verificación (pantalla 2). Tocar una validada abre su detalle en modo lectura (con puerta de corrección).
+- No hay estado intermedio "a medias" visible en la bandeja: si el operario abandonó una verificación, la entrega sigue no leída y conserva lo ya confirmado.
+
+> PREGUNTA A BACKEND: ¿una entrega anunciada puede editarse (el dueño) después de publicada? ¿Qué pasa si el operario ya la abrió? Asumo: editable mientras esté no leída; al validarse, se congela.
+
+## Pantalla 2 — Verificación de la entrega
+
+La lista pre-cargada, un producto por fila, con la cantidad anunciada como **default editable**. El primer producto pendiente queda resaltado con foco.
+
+```
++--------------------------------------------------------------+
+|  <  ENTRADA — Verduleria Nuñez                               |
++--------------------------------------------------------------+
+|    PALTA      12 un.                                   ✓     |
+|    POLLO      20 kg                                    ✓     |
+|    TOMATE     12 kg  (anunciado: 15 kg)                ✓     |
+|  ▶ CEBOLLA    10 kg     [ OK — llegó así ]  [ editar ]       |
+|    QUESO      5 kg                                           |
+|    LIMON      30 un.                                         |
+|                                                              |
+|  al validar, la entrega impacta el stock                     |
+|                              [ validar entrega  (3/8) ]      |
++--------------------------------------------------------------+
+```
+
+- **Flujo optimista:** "OK — llegó así" confirma el default y salta al siguiente pendiente. Un toque por producto.
+- **"editar"** abre la pantalla de cantidad (pantalla 3) con el default precargado.
+- Los confirmados bajan a gris con tilde verde. Si se editó, muestra el recibido y el anunciado entre paréntesis: quedan **ambos valores**, nunca se pisa el anunciado.
+- El botón "validar entrega (3/8)" muestra el progreso y queda deshabilitado hasta confirmar todos los productos.
+- **Al validar, la entrega impacta el stock.** Antes de eso, nada de lo confirmado afecta ningún número del sistema.
+
+> PREGUNTA A BACKEND: ¿qué hace el operario si llegó un producto que NO está en la lista anunciada? Asumo v0.2: no puede agregar ítems a la entrega; le avisa al dueño por fuera y el dueño corrige la entrega. Si esto resulta frecuente, se diseña "agregar producto no anunciado" en v0.3.
+
+> PREGUNTA A BACKEND: ¿un producto puede llegar en cantidad 0 (no vino)? Asumo: sí — el operario edita a 0; queda anunciado vs. recibido = 0.
+
+## Pantalla 3 — Editar cantidad
+
+Sólo se abre cuando la realidad difiere del anuncio. Default precargado, foco automático, teclado numérico grande.
+
+```
++--------------------------------------------------------------+
+|  <  ENTRADA — CEBOLLA  (anunciado: 10 kg)                    |
 +--------------------------------------------------------------+
 |                                                              |
-|  +--------+  +--------+  +--------+  +--------+  +--------+  |
-|  | PALTA  |  | POLLO  |  |TOMATE  |  |CEBOLLA |  | QUESO  |  |
-|  +--------+  +--------+  +--------+  +--------+  +--------+  |
+|                 Cantidad recibida                            |
 |                                                              |
-|  +--------+  +--------+  +--------+  +--------+  +--------+  |
-|  | YOGURT |  | PAN    |  | ACEITE |  | ARROZ  |  | LIMON  |  |
-|  +--------+  +--------+  +--------+  +--------+  +--------+  |
+|                 +----------------+                           |
+|                 |       8        |   kg                      |
+|                 +----------------+                           |
 |                                                              |
-|  [ buscar producto _______________________ ]                 |
+|                 [ teclado numérico ]                         |
+|                                                              |
+|                 [    OK y siguiente  →    ]                  |
 +--------------------------------------------------------------+
 ```
 
-Cada tarjeta: nombre del producto en mayúsculas, tamaño mínimo 120x120 en tablet, 90x90 en celular. Nada más — ni stock, ni ícono decorativo. La búsqueda queda abajo, sólo se usa si el producto no está a la vista.
+El anunciado queda visible en el header como referencia — es parte del hecho a verificar, no un análisis. "OK y siguiente" guarda y salta al próximo pendiente de la lista.
 
-Celular vertical: grilla de 2 columnas, mismo criterio (más usadas arriba). Se scrollea.
+## Pantalla 4 — Entrega validada
 
-> PREGUNTA A BACKEND: ¿el catálogo de productos ya existe o el operario también puede crear productos nuevos desde acá? Por ahora asumo catálogo cerrado, cargado por el dueño. Si el producto no está, el operario no puede registrar.
-
-## Pantalla 2 — Cantidad
-
-Se abre después del toque 2. Nombre del producto arriba, teclado numérico grande abajo, foco automático en el campo. Sin unidad prellenada, sin sugerencia de cantidad, sin "esperado".
-
-Tablet horizontal:
-
-```
-+--------------------------------------------------------------+
-|  <  ENTRADA — PALTA                                          |
-+--------------------------------------------------------------+
-|                                                              |
-|                    Cantidad que llegó                        |
-|                                                              |
-|                    +----------------+                        |
-|                    |      12        |  [unidad v]            |
-|                    +----------------+                        |
-|                                                              |
-|            +-----+  +-----+  +-----+                         |
-|            |  7  |  |  8  |  |  9  |                         |
-|            +-----+  +-----+  +-----+                         |
-|            +-----+  +-----+  +-----+                         |
-|            |  4  |  |  5  |  |  6  |                         |
-|            +-----+  +-----+  +-----+                         |
-|            +-----+  +-----+  +-----+                         |
-|            |  1  |  |  2  |  |  3  |                         |
-|            +-----+  +-----+  +-----+                         |
-|            +-----+  +-----+  +-----+                         |
-|            |  0  |  |  ,  |  |  <x |                         |
-|            +-----+  +-----+  +-----+                         |
-|                                                              |
-|                    [       OK        ]                       |
-+--------------------------------------------------------------+
-```
-
-El selector de unidad (kg / unidades / litros) sale al lado del número, prellenado con la unidad configurada del producto. Si el producto tiene una sola unidad posible, no aparece el selector.
-
-> PREGUNTA A BACKEND: ¿cada producto tiene una única unidad definida en el catálogo, o el operario elige entre varias al registrar? Asumo: unidad única por producto, definida por el dueño. El operario no elige.
-
-Celular vertical: mismo layout, teclado ocupa mitad inferior de la pantalla. Botón OK sticky abajo.
-
-## Estados
-
-### Vacío (no hay productos en el catálogo)
-
-```
-+--------------------------------------------------------------+
-|  <  ENTRADA                                                  |
-+--------------------------------------------------------------+
-|                                                              |
-|                No hay productos cargados.                    |
-|                Pedile al dueño que los cargue.               |
-|                                                              |
-+--------------------------------------------------------------+
-```
-
-### Cargando (cuando se abre la grilla de productos)
-
-Skeletons de tarjetas grises, mismo tamaño y grilla. Nunca spinner centrado — mantiene la forma para que el operario ya sepa dónde va a tocar.
-
-### Error (al guardar)
-
-Toast rojo abajo, no bloqueante para el input:
-
-```
-+--------------------------------------------------------------+
-|  No se pudo guardar. Tocá de nuevo OK.                       |
-+--------------------------------------------------------------+
-```
-
-El botón OK vuelve a estar activo. La cantidad tipeada NO se pierde.
-
-### Éxito
-
-Transición instantánea a una pantalla de confirmación de 1.5 segundos y vuelta al home:
+Confirmatorio de 1.5 segundos y vuelta al home:
 
 ```
 +--------------------------------------------------------------+
 |                                                              |
 |                   [ tilde grande verde ]                     |
 |                                                              |
-|                   ENTRADA REGISTRADA                         |
-|                   PALTA — 12 unidades                        |
+|                   ENTREGA VALIDADA                           |
+|          Verduleria Nuñez — 8 productos → stock actualizado  |
 |                                                              |
-|                    [   corregir   ]  [   listo   ]           |
+|                        [   listo   ]                         |
 |                                                              |
 +--------------------------------------------------------------+
 ```
 
-Botón "listo" o timer de 1.5s vuelven al home. "Corregir" abre el flujo de corrección (ver más abajo). Este confirmatorio es la ÚNICA vez que el operario ve lo que acaba de anotar. Después no lo vuelve a ver.
+## Estados
+
+### Vacío (no hay entregas anunciadas)
+
+```
++--------------------------------------------------------------+
+|  <  ENTRADA — entregas                                       |
++--------------------------------------------------------------+
+|                                                              |
+|            No hay entregas anunciadas.                       |
+|            Cuando el dueño cargue una, aparece acá.          |
+|                                                              |
++--------------------------------------------------------------+
+```
+
+### Cargando
+
+Skeletons con la forma de las filas de la bandeja. Nunca spinner centrado.
+
+### Error (al validar)
+
+Toast rojo abajo, no bloqueante. Lo confirmado NO se pierde:
+
+```
++--------------------------------------------------------------+
+|  No se pudo validar. Tocá de nuevo.                          |
++--------------------------------------------------------------+
+```
 
 ### Sin conexión
 
-Banner naranja arriba, no bloquea el flujo:
+Banner naranja arriba, no bloquea. Confirmaciones y validación se guardan local y se sincronizan al volver la red. El confirmatorio se muestra igual — el operario no espera al servidor.
 
 ```
 +--------------------------------------------------------------+
 |  Sin conexión — se guarda cuando vuelva                      |
 +--------------------------------------------------------------+
-|  <  ENTRADA — ¿qué llegó?                                    |
-| ...                                                          |
 ```
 
-El registro se guarda local y se sincroniza cuando vuelve la red. El confirmatorio se muestra igual. El operario no espera al servidor.
-
-> PREGUNTA A BACKEND: ¿está definido el modelo offline-first? Asumo que sí (registros append-only con id local + sync posterior). Si backend dice que no, rediseñamos la confirmación para que espere al servidor.
+> PREGUNTA A BACKEND: si dos dispositivos validan la misma entrega offline, ¿quién gana? Asumo: primera validación en llegar al servidor gana; la segunda se descarta con aviso.
 
 ## Correcciones
 
-Un registro NUNCA se edita ni se borra. Corregir es hacer un registro nuevo que apunta al anterior.
+Un registro NUNCA se edita ni se borra. Corregir es crear un registro nuevo que apunta al anterior.
 
-### Puerta 1: desde el confirmatorio
+- **Antes de validar:** tocar un producto ya confirmado permite re-confirmarlo o re-editarlo. Como la entrega todavía no impactó stock, esto es parte de la verificación, no una corrección formal.
+- **Después de validar:** desde "ver mis registros" del home (o desde la entrega validada en la bandeja), el operario puede corregir la cantidad recibida de un producto. Eso crea un registro nuevo apuntando al original, y el stock se recalcula.
 
-Botón "corregir" en la pantalla de éxito. Sólo aparece durante los 1.5 segundos del confirmatorio.
-
-### Puerta 2: desde "mis registros" en el home
-
-Abre una lista de los registros del operario en el turno actual, más nuevos arriba:
-
-```
-+--------------------------------------------------------------+
-|  <  Mis registros de hoy                                     |
-+--------------------------------------------------------------+
-|  14:32   ENTRADA   PALTA        12 un.       [corregir]      |
-|  14:15   ENTRADA   QUESO         5 kg        [corregir]      |
-|  13:50   PEDIDO    Rappi                     [corregir]      |
-|  13:20   ENTRADA   POLLO        20 kg        [corregido]     |
-|          └─ corrección: 22 kg (14:05)                        |
-+--------------------------------------------------------------+
-```
-
-Los registros ya corregidos se muestran en gris con la etiqueta "corregido" y su reemplazo debajo indentado. No se puede corregir dos veces la misma cadena — se corrige siempre el último eslabón.
-
-> PREGUNTA A BACKEND: ¿cuál es la ventana temporal en la que un operario puede corregir sus propios registros? ¿Sólo su turno? ¿24 horas? ¿Siempre? Asumo: turno actual. Después de cerrar turno sólo el dueño corrige.
-
-### Pantalla de corrección
-
-Se abre al tocar "corregir". Misma pantalla de cantidad pero con banner arriba indicando qué corrige:
-
-```
-+--------------------------------------------------------------+
-|  <  CORRIGIENDO — PALTA (antes: 12 un.)                      |
-+--------------------------------------------------------------+
-|                                                              |
-|                Nueva cantidad                                |
-|                                                              |
-|                +----------------+                            |
-|                |      15        |  unidades                  |
-|                +----------------+                            |
-|                                                              |
-|                [ teclado numérico ]                          |
-|                                                              |
-|                [       OK        ]                           |
-+--------------------------------------------------------------+
-```
-
-Esta es la ÚNICA pantalla del flujo de operario donde ve un dato numérico previo. Es inevitable — necesita saber qué está corrigiendo. No es un "total" ni un "consumo", es la referencia al hecho anterior.
-
-Al confirmar, se crea un registro nuevo que en el modelo apunta al id del registro corregido. El anterior queda intacto.
+> PREGUNTA A BACKEND: ¿cuál es la ventana en la que el operario puede corregir una entrega validada? Asumo: mientras esté logueado ese día. Después, sólo el dueño.
 
 ## Qué NO se muestra nunca en este flujo
 
 - Stock actual del producto.
-- Cuánto se anotó antes en este turno o en turnos previos.
-- Cuánto "se esperaba" que llegara.
 - Totales, promedios, consumos.
+- Historial de entregas de otros días (sólo la bandeja reciente).
+
+La lista pre-cargada con sus cantidades anunciadas **no** viola el principio de "contar a ciegas": es el hecho declarado que el operario debe verificar, no un cálculo del sistema.

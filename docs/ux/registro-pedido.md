@@ -1,177 +1,179 @@
-# Registro de pedido
+# Registro de pedido (v0.2 — foto primero, no bloqueante)
 
 ## Objetivo del flujo
 
-Que el operario avise, con un toque, que entró un pedido de Rappi o PedidosYa. No importa qué se pidió — importa el hecho de que entró. Es el registro más simple de los tres.
+Que el operario capture, con una foto al momento de empacar, qué salió físicamente de la cocina. La foto es el registro primario y toma segundos. El detalle de productos se completa después, cuando el servicio afloja — o no se completa nunca, y la foto vale igual como evidencia.
 
 ## Usuario
 
-Operario en pleno servicio. Suena el timbre del pedido, tiene que empezar a preparar. Cada segundo cuenta más que en entrada o cierre.
+Operario en pleno servicio. Está empacando el pedido para despachar. Cada segundo cuenta más que en cualquier otro flujo: **nada puede bloquear el despacho**.
 
 ## Presupuesto
 
-- **Camino feliz:** 2 toques, menos de 3 segundos.
+- **Foto (camino crítico):** 2 toques, menos de 5 segundos, no bloqueante.
 - **Toque 1:** botón "PEDIDO" en el home.
-- **Toque 2:** elige plataforma (Rappi / PedidosYa / otro).
+- **Toque 2:** disparador de la cámara.
+- **Completar (diferido):** sin presupuesto estricto — se hace cuando el operario puede. Elegir productos son toques sobre tarjetas grandes, sin teclado.
 
-No hay teclado, no hay lista de productos, no hay cantidad. Sólo dos tarjetas grandes.
+## Pantalla 1 — Foto al empacar
 
-## Pantalla 1 — Elegir plataforma
-
-Se abre después del toque 1. Dos (o tres) tarjetas gigantes, del alto máximo posible, con el logo o inicial de la plataforma. Cada tarjeta ocupa la mitad del ancho útil.
-
-Tablet horizontal:
+Se abre después del toque 1, directo en la cámara. Sin pasos previos.
 
 ```
 +--------------------------------------------------------------+
-|  <  PEDIDO — ¿de dónde?                                      |
+|  <  PEDIDO — sacale foto al paquete                          |
 +--------------------------------------------------------------+
+|  +--------------------------------------------------------+  |
+|  |                                                        |  |
+|  |                   [ vista de cámara ]                  |  |
+|  |                   encuadrá el paquete                  |  |
+|  |                                                        |  |
+|  +--------------------------------------------------------+  |
 |                                                              |
-|   +---------------------+   +---------------------+          |
-|   |                     |   |                     |          |
-|   |                     |   |                     |          |
-|   |       RAPPI         |   |     PEDIDOSYA       |          |
-|   |                     |   |                     |          |
-|   |                     |   |                     |          |
-|   +---------------------+   +---------------------+          |
+|                        ( disparador )                        |
 |                                                              |
-|                       [   otro    ]                          |
+|     sacá la foto y seguí — el detalle se completa después    |
 +--------------------------------------------------------------+
 ```
 
-Celular vertical: mismas dos tarjetas, apiladas una arriba de la otra, cada una ocupando ~35% del alto útil. "Otro" queda como link chico abajo.
+- El disparador es el único control. Sacar la foto guarda el registro y muestra el confirmatorio.
+- No hay selección de plataforma, ni lista de productos, ni ningún paso más. La foto ES el registro.
 
-```
-+----------------------+
-|  <  PEDIDO           |
-+----------------------+
-|                      |
-| +------------------+ |
-| |                  | |
-| |      RAPPI       | |
-| |                  | |
-| +------------------+ |
-|                      |
-| +------------------+ |
-| |                  | |
-| |    PEDIDOSYA     | |
-| |                  | |
-| +------------------+ |
-|                      |
-|     [   otro    ]    |
-+----------------------+
-```
+> PREGUNTA A BACKEND: ¿registramos la plataforma (Rappi / PedidosYa) en algún momento del flujo? v0.2 la saca del camino crítico y no la pide tampoco al completar. Si el dueño la necesita para su análisis, se agrega como toque opcional en "completar" — confirmar con el dueño.
 
-> PREGUNTA A BACKEND: ¿el catálogo de plataformas es fijo (Rappi, PedidosYa, otro) o el dueño puede agregar más (ej. Uber Eats)? Asumo: catálogo fijo para v0.1, con "otro" como escape. En v0.2 lo hace configurable.
+## Pantalla 2 — Guardado (pendiente)
 
-## Pantalla 2 — Confirmación
-
-Instantánea, 1.5 segundos, y vuelve al home:
+Confirmatorio de 1.5 segundos y vuelta al home:
 
 ```
 +--------------------------------------------------------------+
 |                                                              |
 |                   [ tilde grande verde ]                     |
 |                                                              |
-|                    PEDIDO REGISTRADO                         |
-|                    Rappi — 20:42                             |
+|                    PEDIDO GUARDADO                           |
+|     20:42 — queda PENDIENTE en la bandeja,                   |
+|              completalo cuando puedas                        |
 |                                                              |
-|                   [  corregir  ]   [   listo   ]             |
+|                        [   listo   ]                         |
 |                                                              |
 +--------------------------------------------------------------+
 ```
 
-"Corregir" queda visible sólo durante los 1.5s del confirmatorio, y también desde "mis registros" del home.
+## Pantalla 3 — Bandeja de pedidos
+
+Accesible desde el home (mismo botón "PEDIDO" muestra la bandeja abajo de la cámara, o "ver mis registros"). Más nuevos arriba.
+
+```
++--------------------------------------------------------------+
+|  <  PEDIDOS — bandeja                                        |
++--------------------------------------------------------------+
+|  +--------------------------------------------------------+  |
+|  | [foto]  20:42 · hoy         [ PENDIENTE ] [completar] |  |
+|  |         sin detalle todavía                            |  |
+|  +--------------------------------------------------------+  |
+|  +--------------------------------------------------------+  |
+|  | [foto]  19:15 · hoy  (gris)      [ TERMINADO ✓ ]      |  |
+|  |         3 productos                                    |  |
+|  +--------------------------------------------------------+  |
+|  +--------------------------------------------------------+  |
+|  | [foto]  21:03 · ayer        [ PENDIENTE ] [completar] |  |
+|  |         solo foto                                      |  |
+|  +--------------------------------------------------------+  |
++--------------------------------------------------------------+
+```
+
+- **Estados: pendiente → terminado.** El badge PENDIENTE lleva borde amarillo; TERMINADO baja a gris con tilde.
+- Un pendiente viejo ("solo foto") no molesta ni bloquea nada: puede quedar así indefinidamente y el tablero del dueño lo muestra como pedido sin detalle.
+- La miniatura de la foto identifica el pedido — es más rápido reconocer el paquete que leer una hora.
+
+## Pantalla 4 — Completar pedido
+
+Se abre al tocar "completar" en un pendiente.
+
+```
++--------------------------------------------------------------+
+|  <  COMPLETAR — pedido de 20:42                              |
++--------------------------------------------------------------+
+|  +----------------+   ¿qué salió en este pedido? (mínimo 1)  |
+|  |                |                                          |
+|  |    foto del    |   +----------+ +----------+ +--------+   |
+|  |    paquete     |   | PALTA ×2 | | POLLO ×1 | | TOMATE |   |
+|  |                |   +----------+ +----------+ +--------+   |
+|  |                |   +----------+ +----------+ +--------+   |
+|  |                |   |  QUESO   | |   PAN    | | ARROZ  |   |
+|  +----------------+   +----------+ +----------+ +--------+   |
+|                                                              |
+|  dejar solo foto por ahora    [ terminar pedido (2 productos)]|
++--------------------------------------------------------------+
+```
+
+- La foto queda a la vista mientras se eligen los productos — el operario mira el paquete, no recuerda de memoria.
+- Tocar una tarjeta la selecciona con cantidad ×1; tocarla de nuevo suma. Las seleccionadas se pintan oscuras con la cantidad.
+- **"terminar pedido" exige mínimo 1 producto.** Con cero seleccionados, el botón queda deshabilitado.
+- **"dejar solo foto por ahora"** vuelve a la bandeja sin cambiar el estado: sigue pendiente.
+
+> PREGUNTA A BACKEND: ¿un operario puede completar un pedido que fotografió otro operario (turno anterior)? Asumo: sí — el registro guarda quién sacó la foto y quién completó el detalle, como eventos separados.
+
+## Pantalla 5 — Terminado
+
+Confirmatorio de 1.5 segundos y vuelta a la bandeja:
+
+```
++--------------------------------------------------------------+
+|                                                              |
+|                   [ tilde grande verde ]                     |
+|                                                              |
+|                   PEDIDO TERMINADO                           |
+|                pedido de 20:42 — 2 productos                 |
+|                                                              |
+|                        [   listo   ]                         |
+|                                                              |
++--------------------------------------------------------------+
+```
 
 ## Qué se registra en el modelo
 
-- Plataforma (Rappi / PedidosYa / otro).
-- Timestamp exacto del toque 2.
-- Operario del turno.
-
-No se registra qué productos se pidieron. Eso llega cuando se integren las APIs (fuera de alcance v0.1).
-
-> PREGUNTA A BACKEND: ¿el registro de pedido necesita un contador (ej. "3 pedidos de Rappi en la última hora") o cada toque es un evento independiente sin agregación previa? Asumo: cada toque es un evento independiente. La agregación la hace el tablero del dueño.
+- **Al sacar la foto:** la foto, timestamp exacto, operario. Estado: pendiente.
+- **Al completar:** lista de productos con cantidades (mínimo 1), operario que completó, timestamp. Estado: terminado.
+- Ambos son eventos separados en el modelo append-only: la foto nunca se toca al completar.
 
 ## Estados
 
-### Vacío
+### Vacío (bandeja sin pedidos)
 
-No aplica — siempre hay al menos "Rappi", "PedidosYa" y "otro".
+"Todavía no hay pedidos hoy. Sacá la primera foto al empacar."
 
 ### Cargando
 
-Skeletons de dos tarjetas grises. En la práctica, esta pantalla debería cargar instantánea porque el catálogo de plataformas es fijo y cabe en el bundle.
+Skeletons con la forma de las filas (miniatura + dos líneas). Nunca spinner solo.
 
-### Error (al guardar)
+### Error (al subir la foto)
 
-Toast rojo abajo, no bloqueante:
-
-```
-+--------------------------------------------------------------+
-|  No se pudo guardar. Tocá de nuevo.                          |
-+--------------------------------------------------------------+
-```
-
-Las tarjetas siguen tocables. Se puede reintentar sin perder nada.
-
-### Éxito
-
-Ya descripto arriba: confirmatorio de 1.5s con "corregir" y "listo".
+La foto queda en cola local y se reintenta sola. El operario ve el confirmatorio igual — el pedido aparece en la bandeja con la miniatura local. No hay toast: no hay nada que el operario deba hacer.
 
 ### Sin conexión
 
-Banner naranja arriba, no bloquea:
+**Crítico acá.** Banner naranja, no bloquea nada: la foto se guarda local, el confirmatorio sale igual, y la cola sube cuando vuelve la red. El operario jamás espera al servidor con un pedido en la mano.
 
 ```
 +--------------------------------------------------------------+
-|  Sin conexión — se guarda cuando vuelva                      |
+|  Sin conexión — la foto se sube cuando vuelva                |
 +--------------------------------------------------------------+
-|  <  PEDIDO — ¿de dónde?                                      |
-| ...                                                          |
 ```
 
-El toque en la tarjeta se guarda local, se confirma al operario y se sincroniza cuando vuelve la red. Este es CRÍTICO acá: el operario no puede quedarse esperando servidor cuando está entrando el pedido.
+> PREGUNTA A BACKEND: ¿cuánto pesa la foto y cuánto se retiene? Asumo: se comprime en el dispositivo (~500KB) y se retiene mínimo 90 días. Confirmar política de retención con el dueño.
 
 ## Correcciones
 
-Un pedido registrado por error también se corrige como registro nuevo, nunca borrado.
+Un pedido NUNCA se borra. Todo se corrige con registros nuevos:
 
-### Caso típico
-
-El operario tocó "Rappi" cuando era "PedidosYa". O tocó "PEDIDO" sin querer (falso positivo).
-
-### Pantalla de corrección
-
-Desde el confirmatorio o desde "mis registros", tocar "corregir" abre:
-
-```
-+--------------------------------------------------------------+
-|  <  CORRIGIENDO — Pedido de 20:42 (antes: Rappi)             |
-+--------------------------------------------------------------+
-|                                                              |
-|   +---------------------+   +---------------------+          |
-|   |       RAPPI         |   |     PEDIDOSYA       |          |
-|   +---------------------+   +---------------------+          |
-|                                                              |
-|                       [  otro  ]                             |
-|                                                              |
-|                       [  anular  ]                           |
-+--------------------------------------------------------------+
-```
-
-- Tocar otra plataforma: crea registro nuevo apuntando al original, con la plataforma correcta.
-- Tocar "anular": crea registro nuevo apuntando al original, marcado como "anulado" (falso positivo).
-
-En ambos casos, el registro original queda intacto en el modelo. El tablero del dueño puede mostrar la corrección o el estado final según necesite.
-
-> PREGUNTA A BACKEND: ¿existe el concepto de "registro anulado" en el modelo, o toda corrección es un cambio de dato (nunca una anulación pura)? Si no existe, el flujo de "anular" queda pendiente hasta que backend lo defina.
+- **Foto por error (falso positivo):** desde la bandeja, el pedido pendiente ofrece "anular" — crea un registro nuevo que marca el original como anulado. La foto queda.
+- **Detalle mal completado:** un pedido terminado ofrece "corregir productos" — crea un registro nuevo con la lista corregida apuntando al anterior.
 
 ## Qué NO se muestra nunca en este flujo
 
-- Cuántos pedidos van hoy.
-- Cuántos pedidos van del turno.
-- Ranking de plataformas.
+- Cuántos pedidos van hoy / del período.
+- Ranking de productos ni de nada.
 - Ninguna estadística agregada.
 
-Ese análisis es del dueño, no del operario.
+Ese análisis es del dueño, no del operario. La bandeja muestra sólo lo operativo: qué está pendiente de completar.

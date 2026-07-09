@@ -59,7 +59,7 @@ El conteo de stock (antes "cierre") **no está atado al turno**:
 - Se cuenta **periódicamente** (frecuencia a definir con el dueño) o **cuando el dueño lo pide**.
 - El flujo de conteo es el mismo que en v0.1: lista de productos, contar uno por uno, sin ver esperados.
 
-> ⚠️ **Asunción a confirmar con el dueño:** la periodicidad concreta (¿semanal? ¿dos veces por semana? ¿sólo a pedido?) y quién dispara el conteo a pedido. Los wireframes de inventario se mantienen de v0.1 hasta confirmar esto.
+> ⚠️ **Asunción a confirmar con el dueño:** la periodicidad concreta (¿semanal? ¿dos veces por semana? ¿sólo a pedido?) y quién dispara el conteo a pedido. El flujo de conteo se mantiene de v0.1 (renombrado a INVENTARIO en las pantallas); sólo la periodicidad y el aviso al operario quedan pendientes.
 
 ## Principios de diseño (no negociables)
 
