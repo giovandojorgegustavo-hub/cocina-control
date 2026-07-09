@@ -15,9 +15,9 @@
  */
 import { useEffect, useRef, useState, useCallback, type RefObject } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { enqueuePhoto, flushQueue } from '../lib/photoQueue'
+import { enqueuePhoto, flushQueue, compressCanvas } from '../lib/photoQueue'
 
-type ScreenState = 'camera' | 'confirmed' | 'no-camera' | 'permission-denied'
+type ScreenState = 'camera' | 'confirmed' | 'no-camera' | 'permission-denied' | 'photo-too-large'
 
 // Generate a UUID v4 — native if available, fallback otherwise
 function generateLocalId(): string {
@@ -120,6 +120,31 @@ function ConfirmedView({ time }: { time: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// Photo too large view
+// ---------------------------------------------------------------------------
+
+function PhotoTooLargeView({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div
+      className="h-screen flex flex-col items-center justify-center bg-gray-900 text-white gap-6 px-8 text-center"
+      data-testid="photo-too-large-view"
+    >
+      <p className="text-lg font-semibold">La foto es demasiado grande.</p>
+      <p className="text-gray-400 text-sm">
+        Intentá otra vez con menos zoom.
+      </p>
+      <button
+        onClick={onRetry}
+        className="mt-4 bg-white text-gray-900 font-bold text-base px-8 py-4 min-h-[56px] active:opacity-70"
+        aria-label="Reintentar foto"
+      >
+        Reintentar
+      </button>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Main camera view
 // ---------------------------------------------------------------------------
 
@@ -204,6 +229,9 @@ export function NuevoPedido() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  // Prevents double-tap from firing the shutter twice (H-02).
+  // No reset needed — component unmounts after confirmation.
+  const shuttingRef = useRef<boolean>(false)
   const [screen, setScreen] = useState<ScreenState>('camera')
   const [confirmedTime, setConfirmedTime] = useState('')
 
@@ -256,9 +284,25 @@ export function NuevoPedido() {
     }
   })
 
+  // Navigate home 1.5 s after confirmation screen appears (H-09: with cleanup)
+  useEffect(() => {
+    if (screen !== 'confirmed') return
+    const t = setTimeout(() => {
+      navigate('/', { replace: true })
+    }, 1500)
+    return () => clearTimeout(t)
+  }, [screen, navigate])
+
   const handleShutter = useCallback(() => {
+    // H-02: guard against double-tap
+    if (shuttingRef.current) return
+    shuttingRef.current = true
+
     const video = videoRef.current
-    if (!video) return
+    if (!video) {
+      shuttingRef.current = false
+      return
+    }
 
     // 1. Capture frame to canvas
     const canvas = canvasRef.current ?? document.createElement('canvas')
@@ -267,7 +311,10 @@ export function NuevoPedido() {
     canvas.width = video.videoWidth || 1280
     canvas.height = video.videoHeight || 720
     const ctx = canvas.getContext('2d')
-    if (!ctx) return
+    if (!ctx) {
+      shuttingRef.current = false
+      return
+    }
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
 
     // 2. Record display time immediately
@@ -283,29 +330,37 @@ export function NuevoPedido() {
     // 4. Stop the camera stream (no longer needed)
     streamRef.current?.getTracks().forEach((t) => t.stop())
 
-    // 5. Compress + enqueue in background (non-blocking)
-    canvas.toBlob(
-      (blob) => {
-        if (!blob) return
-        const localId = generateLocalId()
-        void enqueuePhoto(blob, localId).then(() => {
-          // Kick off upload attempt immediately if we're online
-          void flushQueue()
-        })
-      },
-      'image/jpeg',
-      0.8,
-    )
-
-    // 6. Navigate home after 1.5 s
-    setTimeout(() => {
-      navigate('/', { replace: true })
-    }, 1500)
-  }, [navigate])
+    // 5. Compress + validate size + enqueue in background (non-blocking) (H-07)
+    compressCanvas(canvas, (blob, tooLarge) => {
+      if (tooLarge) {
+        // Show error state — but confirmation already showed, so we navigate
+        // back to camera so they can retry. The confirmation was already shown
+        // for UX continuity; we replace with the error state.
+        setScreen('photo-too-large')
+        return
+      }
+      if (!blob) return
+      const localId = generateLocalId()
+      void enqueuePhoto(blob, localId).then(() => {
+        // Kick off upload attempt immediately if we're online
+        void flushQueue()
+      })
+    })
+  }, [])
 
   if (screen === 'no-camera') return <NoCameraView reason="unavailable" />
   if (screen === 'permission-denied') return <NoCameraView reason="denied" />
   if (screen === 'confirmed') return <ConfirmedView time={confirmedTime} />
+  if (screen === 'photo-too-large') {
+    return (
+      <PhotoTooLargeView
+        onRetry={() => {
+          shuttingRef.current = false
+          setScreen('camera')
+        }}
+      />
+    )
+  }
 
   return <CameraView videoRef={videoRef} onShutter={handleShutter} />
 }

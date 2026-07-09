@@ -26,7 +26,7 @@ export function AuthImg({ src, alt, className, 'data-testid': testId }: AuthImgP
   const [objectUrl, setObjectUrl] = useState<string | null>(null)
 
   useEffect(() => {
-    let revoked = false
+    const controller = new AbortController()
     let blobUrl: string | null = null
 
     async function load() {
@@ -35,24 +35,22 @@ export function AuthImg({ src, alt, className, 'data-testid': testId }: AuthImgP
         if (token) {
           headers['Authorization'] = `Bearer ${token}`
         }
-        const res = await fetch(src, { headers })
+        const res = await fetch(src, { headers, signal: controller.signal })
         if (!res.ok) return
         const blob = await res.blob()
-        if (revoked) {
-          // Component unmounted while fetch was in flight — don't set state
-          return
-        }
         blobUrl = URL.createObjectURL(blob)
         setObjectUrl(blobUrl)
-      } catch {
-        // Silently fall back to placeholder
+      } catch (err) {
+        // AbortError is expected on unmount — ignore it. Other errors fall back
+        // to the placeholder silently.
+        if (err instanceof DOMException && err.name === 'AbortError') return
       }
     }
 
     void load()
 
     return () => {
-      revoked = true
+      controller.abort()
       if (blobUrl) URL.revokeObjectURL(blobUrl)
     }
     // Re-fetch if the src or token changes

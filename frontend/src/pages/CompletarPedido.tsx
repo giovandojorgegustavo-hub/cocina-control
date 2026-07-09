@@ -11,7 +11,7 @@
  * "terminar pedido" exige mínimo 1 producto seleccionado.
  * "dejar solo foto por ahora" vuelve a la bandeja sin llamar al backend.
  */
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useOrder, useCompleteOrder } from '../lib/orders'
 import { useProducts } from '../lib/products'
@@ -180,6 +180,15 @@ export function CompletarPedido() {
   const [screen, setScreen] = useState<'form' | 'confirmed'>('form')
   const [showError, setShowError] = useState(true)
 
+  // Navigate back to bandeja 1.5 s after confirmation screen (H-09: with cleanup)
+  useEffect(() => {
+    if (screen !== 'confirmed') return
+    const t = setTimeout(() => {
+      navigate('/pedidos', { replace: true })
+    }, 1500)
+    return () => clearTimeout(t)
+  }, [screen, navigate])
+
   const totalSelected = Array.from(selections.values()).reduce(
     (acc, s) => acc + s.quantity,
     0,
@@ -223,9 +232,7 @@ export function CompletarPedido() {
     try {
       await completeOrder.mutateAsync({ items })
       setScreen('confirmed')
-      setTimeout(() => {
-        navigate('/pedidos', { replace: true })
-      }, 1500)
+      // Navigation is handled by the useEffect above (H-09: cleanup on unmount)
     } catch {
       setShowError(true)
     }

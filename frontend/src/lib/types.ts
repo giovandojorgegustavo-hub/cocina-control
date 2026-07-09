@@ -67,7 +67,7 @@ export interface CompleteOrderPayload {
 // Photo queue (local-only, not from the API)
 // ---------------------------------------------------------------------------
 
-export type PhotoQueueStatus = 'queued' | 'uploading' | 'done' | 'failed'
+export type PhotoQueueStatus = 'queued' | 'uploading' | 'done' | 'failed' | 'orphaned'
 
 export interface PhotoQueueEntry {
   /** Client-generated UUID. Used as local order id until server assigns one. */
@@ -75,6 +75,8 @@ export interface PhotoQueueEntry {
   blob: Blob
   timestamp: string // ISO 8601 UTC, created at capture time
   status: PhotoQueueStatus
+  /** User who captured this photo — used to prevent cross-user upload and visibility */
+  userId: string
   /** Set after server returns the real id */
   serverId?: string
   retries: number

@@ -9,10 +9,10 @@
  * Los pedidos en cola local (aún no subidos) muestran la miniatura
  * desde la Blob local en IndexedDB.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useOrders } from '../lib/orders'
-import { getAllQueueEntries } from '../lib/photoQueue'
+import { getAllQueueEntries, onQueueChange } from '../lib/photoQueue'
 import { useAuthWithGetters } from '../lib/auth'
 import { formatRelativeDate } from '../lib/date'
 import { AuthImg } from '../components/AuthImg'
@@ -68,9 +68,11 @@ function SkeletonRow() {
 interface OrderRowProps {
   order: DeliveryOrderListItem
   onComplete: (id: string) => void
+  /** When true, the complete action is hidden (owner view is read-only) */
+  readOnly?: boolean
 }
 
-function OrderRow({ order, onComplete }: OrderRowProps) {
+function OrderRow({ order, onComplete, readOnly = false }: OrderRowProps) {
   const isPending = order.status === 'pending'
   const photoSrc = `${BASE_URL}/api/v1/delivery-orders/${order.id}/photo`
 
@@ -104,7 +106,8 @@ function OrderRow({ order, onComplete }: OrderRowProps) {
       {/* Badge + action */}
       <div className="flex flex-col items-end gap-2 flex-shrink-0">
         <OrderBadge status={order.status} />
-        {isPending && (
+        {/* H-10: owner sees the bandeja in read-only mode — no complete button */}
+        {isPending && !readOnly && (
           <button
             onClick={() => onComplete(order.id)}
             className="bg-gray-900 text-white text-xs font-bold uppercase tracking-wider px-3 py-2 min-h-[40px] active:opacity-70"
@@ -173,7 +176,7 @@ function sortOrders(orders: DeliveryOrderListItem[]): DeliveryOrderListItem[] {
 
 export function BandejaPedidos() {
   const navigate = useNavigate()
-  const { userId } = useAuthWithGetters()
+  const { userId, role } = useAuthWithGetters()
   const { data, isLoading, isError, refetch } = useOrders(userId)
   const [showError, setShowError] = useState(true)
 
@@ -181,40 +184,55 @@ export function BandejaPedidos() {
   const [localEntries, setLocalEntries] = useState<PhotoQueueEntry[]>([])
   const [localBlobUrls, setLocalBlobUrls] = useState<Map<string, string>>(new Map())
 
-  useEffect(() => {
-    let alive = true
-    async function loadLocal() {
-      const all = await getAllQueueEntries()
-      // Only show entries that haven't been confirmed by server yet
-      const pending = all.filter(
-        (e) => e.status !== 'done' && e.serverId === undefined,
-      )
-      if (!alive) return
-      setLocalEntries(pending)
+  const loadLocal = useCallback(async () => {
+    const all = await getAllQueueEntries()
+    // Only show entries that:
+    // - haven't been uploaded yet (status !== 'done', no serverId)
+    // - belong to the current user (H-08: cross-user isolation on shared tablets)
+    const pending = all.filter(
+      (e) =>
+        e.status !== 'done' &&
+        e.status !== 'orphaned' &&
+        e.serverId === undefined &&
+        e.userId === userId,
+    )
+    setLocalEntries(pending)
 
-      // Create blob URLs for rendering
-      const urls = new Map<string, string>()
-      for (const entry of pending) {
-        if (entry.blob) {
-          urls.set(entry.localId, URL.createObjectURL(entry.blob))
-        }
+    // Create blob URLs for rendering
+    const urls = new Map<string, string>()
+    for (const entry of pending) {
+      if (entry.blob) {
+        urls.set(entry.localId, URL.createObjectURL(entry.blob))
       }
-      setLocalBlobUrls(urls)
     }
-    void loadLocal()
+    setLocalBlobUrls((prev) => {
+      // Revoke the previous set before replacing
+      prev.forEach((url) => URL.revokeObjectURL(url))
+      return urls
+    })
+  }, [userId])
 
+  // Initial load
+  useEffect(() => {
+    void loadLocal()
     return () => {
-      alive = false
       // Revoke blob URLs on unmount
       setLocalBlobUrls((prev) => {
         prev.forEach((url) => URL.revokeObjectURL(url))
         return new Map()
       })
     }
-  }, [])
+  }, [loadLocal])
+
+  // H-05: react to queue changes (successful uploads, new enqueues)
+  useEffect(() => {
+    const unsub = onQueueChange(() => { void loadLocal() })
+    return unsub
+  }, [loadLocal])
 
   const sorted = data ? sortOrders(data) : []
   const hasData = sorted.length > 0 || localEntries.length > 0
+  const isOwner = role === 'owner'
 
   function handleRetry() {
     setShowError(true)
@@ -276,6 +294,7 @@ export function BandejaPedidos() {
                 key={order.id}
                 order={order}
                 onComplete={(id) => navigate(`/pedidos/${id}/completar`)}
+                readOnly={isOwner}
               />
             ))}
           </div>
