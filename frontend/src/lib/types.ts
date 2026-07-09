@@ -141,3 +141,60 @@ export interface CorrectInventoryItemResponse {
   new_item_id: string
   corrects_id: string
 }
+
+// ---------------------------------------------------------------------------
+// Dashboard (owner-only)
+// ---------------------------------------------------------------------------
+
+export interface DashboardProduct {
+  product_id: string
+  name: string
+  unit: string
+  stock_now: number
+  entries: number
+  /** null when consumption_available is false */
+  consumption: number | null
+  consumption_available: boolean
+  alert: boolean
+  low_stock_threshold: number | null
+}
+
+export interface DashboardLowStockItem {
+  product_id: string
+  name: string
+  unit: string
+  stock_now: number
+  low_stock_threshold: number
+}
+
+export interface DashboardOrdersSummary {
+  completed_count: number
+  photo_only_count: number
+}
+
+export interface DashboardSummary {
+  products: DashboardProduct[]
+  low_stock: DashboardLowStockItem[]
+  orders_summary: DashboardOrdersSummary
+  /** ISO 8601 UTC — most recent inventory count timestamp across all products */
+  last_inventory_at: string | null
+}
+
+// ---------------------------------------------------------------------------
+// Traceability event
+// ---------------------------------------------------------------------------
+
+export type TraceabilityEventType = 'ENTREGA' | 'PEDIDO' | 'INVENTARIO'
+
+export interface TraceabilityEvent {
+  id: string
+  date: string // ISO 8601 UTC
+  type: TraceabilityEventType
+  qty: number
+  unit: string
+  operator: string
+  note: string | null
+  corrects_id: string | null
+  /** Set on the corrected event: "corregido → X un." */
+  corrected_by_note: string | null
+}

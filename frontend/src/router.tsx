@@ -9,15 +9,9 @@ import { CompletarPedido } from './pages/CompletarPedido'
 import { InventarioLista } from './pages/InventarioLista'
 import { ContarProducto } from './pages/ContarProducto'
 import { InventarioCompletado } from './pages/InventarioCompletado'
+import { Tablero } from './pages/Tablero'
+import { Trazabilidad } from './pages/Trazabilidad'
 import { RequireAuth, RequireRole } from './lib/guards'
-
-function OwnerPlaceholder() {
-  return (
-    <main className="min-h-screen flex items-center justify-center bg-gray-50">
-      <p className="text-gray-500 text-sm">Tablero del dueño — viene en el proximo issue</p>
-    </main>
-  )
-}
 
 export const router = createBrowserRouter([
   {
@@ -119,7 +113,17 @@ export const router = createBrowserRouter([
     element: (
       <RequireAuth>
         <RequireRole role="owner">
-          <OwnerPlaceholder />
+          <Tablero />
+        </RequireRole>
+      </RequireAuth>
+    ),
+  },
+  {
+    path: '/tablero/producto/:productId',
+    element: (
+      <RequireAuth>
+        <RequireRole role="owner">
+          <Trazabilidad />
         </RequireRole>
       </RequireAuth>
     ),
