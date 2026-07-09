@@ -2,6 +2,7 @@ import { createBrowserRouter, Navigate } from 'react-router-dom'
 import { Login } from './pages/Login'
 import { Home } from './pages/Home'
 import { Bandeja } from './pages/Bandeja'
+import { Verificacion } from './pages/Verificacion'
 import { RequireAuth, RequireRole } from './lib/guards'
 
 function OwnerPlaceholder() {
@@ -38,14 +39,11 @@ export const router = createBrowserRouter([
     ),
   },
   {
-    // Placeholder for Frontend #4 — delivery detail / verification screen
     path: '/entradas/:id',
     element: (
       <RequireAuth>
         <RequireRole role="operator">
-          <div className="min-h-screen flex items-center justify-center bg-gray-50">
-            <p className="text-gray-500 text-sm">Verificacion de entrega — viene en Frontend #4</p>
-          </div>
+          <Verificacion />
         </RequireRole>
       </RequireAuth>
     ),
