@@ -8,6 +8,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 from cocina_control.db import Base
 from cocina_control.models.base import AppendOnlyMixin, TimestampMixin
 
+# Re-export for convenience in API layer.
+__all__ = ["Delivery", "DeliveryItem"]
+
 _DELIVERY_STATUS_ENUM = sa.Enum(
     "no_leida", "en_verificacion", "validada",
     name="delivery_status",
@@ -55,6 +58,10 @@ class DeliveryItem(Base, AppendOnlyMixin):
         sa.Index("ix_delivery_items_delivery_id", "delivery_id"),
         sa.Index("ix_delivery_items_product_id", "product_id"),
         sa.Index("ix_delivery_items_corrects_id", "corrects_id"),
+        # Prevent chain bifurcation: each item can be corrected at most once.
+        # If two concurrent corrections race past the leaf check, the second
+        # INSERT will fail here with IntegrityError (uq_delivery_items_corrects_id).
+        sa.UniqueConstraint("corrects_id", name="uq_delivery_items_corrects_id"),
         sa.CheckConstraint(
             "corrects_id IS DISTINCT FROM id",
             name="ck_delivery_items_no_self_correction",
@@ -86,3 +93,11 @@ class DeliveryItem(Base, AppendOnlyMixin):
         sa.ForeignKey("delivery_items.id", ondelete="RESTRICT"), nullable=True
     )
     reason: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    # Audit: who confirmed this item and when.  Set by confirm_item(); NULL on
+    # pre-load rows and on correction rows (those are created_by, not confirmed).
+    confirmed_by: Mapped[uuid.UUID | None] = mapped_column(
+        sa.ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )

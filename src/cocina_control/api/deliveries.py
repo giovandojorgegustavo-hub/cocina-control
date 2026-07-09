@@ -57,6 +57,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from cocina_control.api.deps import get_current_user, require_role
@@ -214,7 +215,9 @@ def _build_item_responses(
                 product_id=item.product_id,
                 product_name=product.name,
                 announced_qty=item.announced_qty,
-                received_qty=item.received_qty,  # always None in this PR
+                received_qty=item.received_qty,
+                corrects_id=item.corrects_id,
+                reason=item.reason,
             )
         )
     return responses
@@ -562,7 +565,11 @@ def confirm_item(
     - no_leida      → 409 "open the delivery first"
     - validada      → 409 "delivery already validated; use correct endpoint"
     """
-    delivery = _get_delivery_or_404(session, delivery_id)
+    # SELECT FOR UPDATE: serialises concurrent confirms on the same delivery.
+    # Without this lock, two concurrent confirms on the same item could both
+    # read received_qty=None, both pass the idempotency check, and both write
+    # different values, causing a race.
+    delivery = _get_delivery_for_update_or_404(session, delivery_id)
 
     if delivery.status == "no_leida":
         raise HTTPException(
@@ -575,6 +582,7 @@ def confirm_item(
             detail="Delivery already validated; use correct endpoint",
         )
 
+    # Re-read item within the locked transaction for consistency.
     item = _get_leaf_item_or_404(session, delivery_id, item_id)
 
     # Idempotency: same value → return current state without writing.
@@ -588,6 +596,7 @@ def confirm_item(
                 announced_qty=item.announced_qty,
                 received_qty=item.received_qty,
                 corrects_id=item.corrects_id,
+                reason=item.reason,
             )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -597,7 +606,15 @@ def confirm_item(
             ),
         )
 
+    now = datetime.now(UTC)
     item.received_qty = body.received_qty
+    item.confirmed_by = current_user.id
+    item.confirmed_at = now
+
+    # Record who last acted on this delivery (same pattern as open/validate).
+    delivery.updated_at = now
+    delivery.updated_by = current_user.id
+
     session.flush()
 
     product = session.get(Product, item.product_id)
@@ -608,6 +625,7 @@ def confirm_item(
         announced_qty=item.announced_qty,
         received_qty=item.received_qty,
         corrects_id=item.corrects_id,
+        reason=item.reason,
     )
 
 
@@ -712,33 +730,37 @@ def correct_item(
     Permission and time-window rules
     ----------------------------------
     - Owner: can correct at any time, no window restriction.
-    - Operator: can only correct items whose creation date (in UTC-3 calendar)
-      is the same calendar day as now (UTC-3).  If the item was confirmed on a
-      previous calendar day, the operator receives 403.
+    - Operator: window is open only if delivery.validated_at falls on the same
+      calendar day (UTC-3) as now.  This anchors the window to the validation
+      event, not to the item creation date.
 
-    The time-window is based on the item's created_at (when the item row was
-    first inserted at pre-load time), which is effectively the same as the
-    date of the delivery session for practical purposes.  Using the delivery's
-    validated_at would also be valid, but item.created_at is more granular.
-
-    Why item.created_at and not validated_at
+    Why validated_at and not item.created_at
     -----------------------------------------
-    The item row was created when the owner pre-loaded the delivery.  The
-    operator confirmed it (set received_qty) on the same day.  Using
-    item.created_at as the window anchor means the operator's window is tied
-    to the day the delivery was created — which matches the business intent:
-    "same session" ≈ "same calendar day".  If a delivery is pre-loaded at
-    23:55 and the operator confirms at 00:10 the next day, the operator
-    window would be closed.  This edge case is rare and the owner can always
-    correct.
+    Using item.created_at as the anchor caused a subtle loophole: if the owner
+    corrects an item on day D+2 (creating a new leaf with created_at=D+2), the
+    operator could correct that new leaf on day D+2 even though the delivery was
+    validated on day D.  Anchoring on validated_at closes this loophole:
+    - Delivery validated day 3, operator corrects day 3: OK.
+    - Delivery validated day 3, operator corrects day 4: 403.
+    - Delivery validated day 3, owner corrects day 5 (leaf created_at=day 5),
+      operator tries day 5: 403 — window is anchored to validated_at=day 3.
 
-    reason (optional)
-    ------------------
-    When provided, reason is persisted in the new correction row.  This makes
-    the forensic CSV self-explanatory — the owner sees what was corrected and
-    why, without needing a side channel.
+    Concurrency (chain bifurcation prevention)
+    -------------------------------------------
+    Two layers protect the append-only chain:
+    1. SELECT FOR UPDATE on the delivery row serialises concurrent corrections.
+    2. UniqueConstraint("corrects_id") on delivery_items ensures only one row
+       can reference a given item as corrects_id.  If two goroutines race past
+       the leaf check, the second INSERT raises IntegrityError → 409.
+
+    reason (optional, max 500 chars)
+    ----------------------------------
+    When provided, reason is persisted in the new correction row.  Only the
+    length and first 100 chars are logged — never the full text.
     """
-    delivery = _get_delivery_or_404(session, delivery_id)
+    # SELECT FOR UPDATE: serialises concurrent corrections on the same delivery,
+    # preventing chain bifurcation at the application layer.
+    delivery = _get_delivery_for_update_or_404(session, delivery_id)
 
     if delivery.status != "validada":
         raise HTTPException(
@@ -748,11 +770,23 @@ def correct_item(
 
     item = _get_leaf_item_or_404(session, delivery_id, item_id)
 
+    # Defensive guard: cannot correct an unconfirmed item (received_qty is NULL).
+    # This should not happen in normal flow (validate requires all items confirmed),
+    # but protects against direct DB manipulation or future status changes.
+    if item.received_qty is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot correct an unconfirmed item",
+        )
+
     now = datetime.now(UTC)
 
     # Enforce time-window for operators.
+    # Anchor: delivery.validated_at (not item.created_at).  See docstring.
     if current_user.role == "operator":
-        if not is_same_calendar_day_argentina(item.created_at, now):
+        if delivery.validated_at is None or not is_same_calendar_day_argentina(
+            delivery.validated_at, now
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Correction window closed for operator",
@@ -775,20 +809,35 @@ def correct_item(
     delivery.updated_at = now
     delivery.updated_by = current_user.id
 
-    session.flush()
-
-    if body.reason is not None:
-        log.info(
-            "Delivery item corrected with reason",
-            extra={
-                "delivery_id": str(delivery_id),
-                "original_item_id": str(item_id),
-                "new_item_id": str(new_item.id),
-                "corrected_by": str(current_user.id),
-                "role": current_user.role,
-                "reason": body.reason,
-            },
+    try:
+        session.flush()
+    except IntegrityError as exc:
+        session.rollback()
+        constraint = getattr(exc.orig, "diag", None)
+        constraint_name = (
+            constraint.constraint_name if constraint is not None else str(exc.orig)
         )
+        if "uq_delivery_items_corrects_id" in str(constraint_name):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Item already corrected concurrently; refresh and retry",
+            ) from exc
+        raise
+
+    reason_log = body.reason
+    log.info(
+        "correct_item",
+        extra={
+            "action": "correct_item",
+            "delivery_id": str(delivery_id),
+            "item_id_original": str(item_id),
+            "new_item_id": str(new_item.id),
+            "actor_id": str(current_user.id),
+            "actor_role": current_user.role,
+            "reason_length": len(reason_log) if reason_log else 0,
+            "reason_preview": reason_log[:100] if reason_log else None,
+        },
+    )
 
     return DeliveryItemCorrectionResponse(
         id=new_item.id,

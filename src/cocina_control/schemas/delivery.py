@@ -122,10 +122,13 @@ class DeliveryItemCorrect(BaseModel):
     Design decision (issue #11): reason is persisted (option b) rather than
     ignored (option a) because it adds forensic value with no schema cost
     beyond a single nullable TEXT column (migration 0005).
+
+    max_length=500 prevents unbounded payloads while remaining generous enough
+    for any real explanation.
     """
 
     received_qty: Annotated[Decimal, Field(ge=0)]
-    reason: str | None = None
+    reason: Annotated[str | None, Field(default=None, max_length=500)] = None
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +145,7 @@ class DeliveryItemResponse(BaseModel):
     announced_qty: Decimal
     received_qty: Decimal | None
     corrects_id: uuid.UUID | None = None
+    reason: str | None = None
 
 
 class DeliveryListItem(BaseModel):
