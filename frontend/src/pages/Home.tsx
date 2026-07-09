@@ -1,4 +1,5 @@
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { useAuthWithGetters } from '../lib/auth'
 import { apiClient } from '../lib/api'
 
@@ -40,6 +41,7 @@ function ActionButton({ title, subtitle, to }: ActionButtonProps) {
 
 export function Home() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const { clearToken, userId } = useAuthWithGetters()
 
   async function handleLogout() {
@@ -48,6 +50,8 @@ export function Home() {
     } catch {
       // best-effort — ignore errors, always clear locally
     }
+    // Clear query cache before token so next user never sees stale data
+    queryClient.clear()
     clearToken()
     navigate('/login', { replace: true })
   }
@@ -74,23 +78,16 @@ export function Home() {
         Mobile: stacked vertically, each ~1/4 screen height.
       */}
       <main className="flex-1 flex flex-col md:flex-row gap-px bg-gray-300 overflow-hidden">
-        <ActionButton title="ENTRADA" subtitle="llegó una entrega" to="/entradas" />
-        <ActionButton title="INVENTARIO" subtitle="contar stock" to="/inventario" />
-        <ActionButton title="PEDIDO" subtitle="foto al empacar" to="/pedidos/nuevo" />
+        <ActionButton title="ENTRADA" subtitle="(llegó una entrega)" to="/entradas" />
+        <ActionButton title="INVENTARIO" subtitle="(contar stock)" to="/inventario" />
+        <ActionButton title="PEDIDO" subtitle="(foto al empacar)" to="/pedidos/nuevo" />
       </main>
 
-      {/* Footer link */}
+      {/* Footer — Placeholder: 'ver mis registros' se implementa post-v0.2 */}
       <footer className="bg-gray-900 flex-shrink-0 flex justify-end items-center px-4 py-3">
-        <Link
-          to="#"
-          onClick={(e) => {
-            e.preventDefault()
-            alert('Próximamente')
-          }}
-          className="text-xs text-gray-500 underline"
-        >
+        <span className="text-xs text-gray-500 cursor-not-allowed">
           ver mis registros
-        </Link>
+        </span>
       </footer>
     </div>
   )

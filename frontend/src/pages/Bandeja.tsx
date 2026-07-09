@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 import { useDeliveries } from '../lib/deliveries'
+import { useAuthWithGetters } from '../lib/auth'
 import { formatRelativeDate } from '../lib/date'
 import type { DeliveryListItem, DeliveryStatus } from '../lib/types'
 import { ErrorBanner } from '../components/ErrorBanner'
@@ -9,22 +10,18 @@ import { useState } from 'react'
 // Status badge
 // ---------------------------------------------------------------------------
 
+// The wireframe treats `en_verificacion` as unread in the bandeja: an
+// abandoned verification still appears as pending. The detail page (Frontend #4)
+// reads the real status and knows how to resume where the operator left off.
 interface BadgeProps {
   status: DeliveryStatus
 }
 
 function StatusBadge({ status }: BadgeProps) {
-  if (status === 'no_leida') {
+  if (status === 'no_leida' || status === 'en_verificacion') {
     return (
       <span className="inline-block bg-gray-900 text-white text-xs font-bold uppercase tracking-wider px-2 py-1">
         NO LEIDO
-      </span>
-    )
-  }
-  if (status === 'en_verificacion') {
-    return (
-      <span className="inline-block bg-blue-700 text-white text-xs font-bold uppercase tracking-wider px-2 py-1">
-        EN VERIFICACION
       </span>
     )
   }
@@ -66,7 +63,9 @@ interface DeliveryRowProps {
 }
 
 function DeliveryRow({ delivery, onTap }: DeliveryRowProps) {
-  const isUnread = delivery.status === 'no_leida'
+  // The wireframe treats `en_verificacion` as unread in the bandeja: same
+  // visual group and same left-border style as no_leida.
+  const isPending = delivery.status === 'no_leida' || delivery.status === 'en_verificacion'
   const isValidated = delivery.status === 'validada'
 
   return (
@@ -77,12 +76,8 @@ function DeliveryRow({ delivery, onTap }: DeliveryRowProps) {
         'min-h-[72px]',
         'flex flex-col gap-1',
         'active:opacity-70',
-        // Unread: white bg, strong left border
-        isUnread ? 'bg-white border-l-4 border-l-gray-900 border-y border-r border-gray-200' : '',
-        // In verification: white bg, blue left border
-        delivery.status === 'en_verificacion'
-          ? 'bg-white border-l-4 border-l-blue-700 border-y border-r border-gray-200'
-          : '',
+        // Pending (no_leida + en_verificacion): white bg, strong left border
+        isPending ? 'bg-white border-l-4 border-l-gray-900 border-y border-r border-gray-200' : '',
         // Validated: muted gray bg
         isValidated ? 'bg-gray-100 border border-gray-200' : '',
       ]
@@ -110,14 +105,17 @@ function DeliveryRow({ delivery, onTap }: DeliveryRowProps) {
 }
 
 // ---------------------------------------------------------------------------
-// Sort helper: no_leida first, then en_verificacion, then validada; within
-// each group keep server order (created_at DESC as safety net).
+// Sort helper: pending deliveries first (no_leida and en_verificacion share
+// group 0 — the wireframe treats an abandoned verification as still pending),
+// then validada. Within each group: newest first.
 // ---------------------------------------------------------------------------
 
+// The wireframe treats `en_verificacion` as no_leida in the bandeja: a
+// verification abandoned mid-way still appears as pending to the operator.
 const STATUS_ORDER: Record<DeliveryStatus, number> = {
   no_leida: 0,
-  en_verificacion: 1,
-  validada: 2,
+  en_verificacion: 0, // same group as no_leida
+  validada: 1,
 }
 
 function sortDeliveries(deliveries: DeliveryListItem[]): DeliveryListItem[] {
@@ -135,17 +133,19 @@ function sortDeliveries(deliveries: DeliveryListItem[]): DeliveryListItem[] {
 
 export function Bandeja() {
   const navigate = useNavigate()
-  const { data, isLoading, isError, refetch } = useDeliveries()
+  const { userId } = useAuthWithGetters()
+  const { data, isLoading, isError, refetch } = useDeliveries(userId)
   const [showError, setShowError] = useState(true)
 
-  // Reset error visibility when the query status changes
-  // (so re-fetch showing new error re-displays the toast)
+  const sorted = data ? sortDeliveries(data) : []
+  const hasData = sorted.length > 0
+
+  // Reset banner visibility on each new error so the toast re-appears after
+  // a dismiss if a subsequent refetch also fails.
   function handleRetry() {
     setShowError(true)
     void refetch()
   }
-
-  const sorted = data ? sortDeliveries(data) : []
 
   return (
     <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
@@ -171,7 +171,8 @@ export function Bandeja() {
           </div>
         )}
 
-        {!isLoading && !isError && sorted.length === 0 && (
+        {/* Empty state: only when there's no data AND no error AND not loading */}
+        {!isLoading && !isError && !hasData && (
           <div className="flex flex-col items-center justify-center h-full px-8 text-center">
             <p className="text-gray-700 text-lg font-medium">No hay entregas anunciadas.</p>
             <p className="text-gray-500 text-sm mt-2">
@@ -180,7 +181,12 @@ export function Bandeja() {
           </div>
         )}
 
-        {!isLoading && !isError && sorted.length > 0 && (
+        {/*
+          Show the list whenever there is cached data, regardless of error state.
+          An operator on an intermittent connection keeps seeing the last known
+          bandeja while the app retries in the background.
+        */}
+        {!isLoading && hasData && (
           <div className="flex flex-col gap-px bg-gray-300">
             {sorted.map((delivery) => (
               <DeliveryRow
@@ -193,11 +199,12 @@ export function Bandeja() {
         )}
       </main>
 
-      {/* Error toast — non-blocking, at the bottom */}
+      {/* Error banner — overlays at the bottom without hiding the list */}
       {isError && showError && (
         <ErrorBanner
-          message="No se pudieron cargar las entregas. Tocá para reintentar."
-          onDismiss={handleRetry}
+          message="Error al cargar."
+          onDismiss={() => setShowError(false)}
+          onRetry={handleRetry}
         />
       )}
     </div>

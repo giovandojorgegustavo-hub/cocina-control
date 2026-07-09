@@ -31,6 +31,9 @@ export function formatRelativeDate(iso: string, now = new Date()): string {
   const mm = String(localDate.getUTCMinutes()).padStart(2, '0')
   const timeStr = `${hh}:${mm}`
 
+  // Future timestamps (clock skew or pre-loads) are treated as today —
+  // showing a future date would confuse operators.
+  if (diffDays < 0) return `hoy ${timeStr}`
   if (diffDays === 0) return `hoy ${timeStr}`
   if (diffDays === 1) return `ayer ${timeStr}`
   if (diffDays <= 6) return `hace ${diffDays} días`
