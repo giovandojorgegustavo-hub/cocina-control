@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from cocina_control.api.auth import router as auth_router
+from cocina_control.api.deliveries import router as deliveries_router
 from cocina_control.api.health import router as health_router
 from cocina_control.api.products import router as products_router
 from cocina_control.config import get_settings
@@ -25,6 +26,7 @@ app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["127.0.0.1", "localhos
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(products_router, prefix="/api/v1")
+app.include_router(deliveries_router, prefix="/api/v1")
 
 # ---------------------------------------------------------------------------
 # Test-only endpoints
