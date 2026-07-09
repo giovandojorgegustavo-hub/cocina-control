@@ -35,12 +35,19 @@ function itemsReducer(state: ItemMap, action: Action): ItemMap {
     case 'INIT': {
       const next: ItemMap = {}
       for (const item of action.items) {
-        const alreadyConfirmed = item.received_qty !== null
-        next[item.id] = {
-          ...item,
-          confirming: false,
-          confirmedLocally: alreadyConfirmed,
-          confirmedQty: alreadyConfirmed ? item.received_qty : null,
+        const prev = state[item.id]
+        // Preserve in-flight confirm state so an INIT triggered by a refetch
+        // does not race-cancel an optimistic update that is still in flight.
+        if (prev?.confirming) {
+          next[item.id] = { ...prev, ...item }
+        } else {
+          const alreadyConfirmed = item.received_qty !== null
+          next[item.id] = {
+            ...item,
+            confirming: false,
+            confirmedLocally: alreadyConfirmed,
+            confirmedQty: alreadyConfirmed ? item.received_qty : null,
+          }
         }
       }
       return next
@@ -190,6 +197,7 @@ function ItemRow({ item, isFocused, onConfirm, onEdit }: ItemRowProps) {
       ) : (
         <div className="flex gap-2 flex-shrink-0">
           <button
+            id={`ok-${item.id}`}
             onClick={() => onConfirm(item.id, item.announced_qty)}
             disabled={item.confirming}
             className={[
@@ -243,7 +251,7 @@ function EditModal({ item, onConfirm, onClose }: EditModalProps) {
 
   function handleSubmit() {
     const parsed = parseFloat(value.replace(',', '.'))
-    if (isNaN(parsed) || parsed < 0) return
+    if (!isFinite(parsed) || parsed < 0) return
     onConfirm(item.id, parsed)
   }
 
@@ -253,16 +261,19 @@ function EditModal({ item, onConfirm, onClose }: EditModalProps) {
   }
 
   const parsed = parseFloat(value.replace(',', '.'))
-  const isValid = !isNaN(parsed) && parsed >= 0
+  const isValid = isFinite(parsed) && parsed >= 0
 
   return (
+    // Backdrop — clicking outside the card closes the modal without saving.
     <div
       className="fixed inset-0 z-40 flex items-center justify-center bg-black bg-opacity-50"
       role="dialog"
       aria-modal="true"
       aria-label={`Editar cantidad de ${item.product_name}`}
+      onClick={onClose}
     >
-      <div className="bg-white w-full max-w-sm mx-4 flex flex-col">
+      {/* Card — stop propagation so clicks inside don't bubble to the backdrop */}
+      <div className="bg-white w-full max-w-sm mx-4 flex flex-col" onClick={(e) => e.stopPropagation()}>
         {/* Modal header */}
         <div className="bg-gray-900 text-white px-4 py-4 flex items-center gap-3">
           <button
@@ -425,6 +436,14 @@ function ReadOnlyView({ items, validatedAt, supplierName, onBack }: ReadOnlyView
 }
 
 // ---------------------------------------------------------------------------
+// Module-level guard for auto-open: persists across remounts of the same page.
+// Using a Map keyed by delivery-id prevents a second /open if the component
+// unmounts and remounts (e.g. React StrictMode double-invoke in dev).
+// ---------------------------------------------------------------------------
+
+const openAttempts = new Map<string, boolean>()
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -455,8 +474,13 @@ export function Verificacion() {
   // Show the validated confirmation overlay
   const [showValidated, setShowValidated] = useReducer((_: boolean, next: boolean) => next, false)
 
-  // Has the /open call been attempted for this load? Prevents double-firing.
-  const openAttempted = useRef(false)
+  // Per-item ref guard: blocks a second confirm request before the first
+  // re-render has a chance to set `confirming: true` in state.
+  const confirmingRefs = useRef<Record<string, boolean>>({})
+
+  // Guard for the validate button: prevents a double-tap from firing two
+  // /validate requests before the mutation state updates.
+  const validatingRef = useRef(false)
 
   // Init local items when server data arrives
   useEffect(() => {
@@ -465,16 +489,14 @@ export function Verificacion() {
     }
   }, [data])
 
-  // Auto-open: if status is no_leida, call /open once on mount
+  // Auto-open: if status is no_leida, call /open exactly once per delivery-id.
+  // The guard lives at module level (Map) so it survives remounts (StrictMode).
   useEffect(() => {
-    if (data && data.status === 'no_leida' && !openAttempted.current) {
-      openAttempted.current = true
-      openMutation.mutate(data.id)
-    }
-    // If status is en_verificacion, we already opened it (idempotent)
-    if (data && data.status === 'en_verificacion' && !openAttempted.current) {
-      openAttempted.current = true
-    }
+    if (!data) return
+    if (data.status !== 'no_leida') return
+    if (openAttempts.get(data.id)) return
+    openAttempts.set(data.id, true)
+    openMutation.mutate(data.id)
   }, [data, openMutation])
 
   // Dismiss toast after 3 seconds
@@ -491,7 +513,12 @@ export function Verificacion() {
 
   const confirmedCount = orderedItems.filter((i) => i.confirmedLocally).length
   const totalCount = orderedItems.length
-  const allConfirmed = totalCount > 0 && confirmedCount === totalCount
+  // allConfirmed requires every item to be locally confirmed AND not have a
+  // request in flight. This prevents validate from enabling while a confirm
+  // is still pending on the server (H-03).
+  const allConfirmed = totalCount > 0 && orderedItems.every(
+    (i) => i.confirmedLocally && !i.confirming,
+  )
 
   // First pending item index (for ▶ focus indicator)
   const firstPendingIndex = orderedItems.findIndex((i) => !i.confirmedLocally)
@@ -503,6 +530,10 @@ export function Verificacion() {
   const handleConfirm = useCallback(
     (itemId: string, qty: number) => {
       if (!id) return
+      // Ref-level guard: blocks a second tap that arrives before the re-render
+      // has set confirming:true in state. Works even without re-render (H-01).
+      if (confirmingRefs.current[itemId]) return
+      confirmingRefs.current[itemId] = true
 
       // Optimistic update
       dispatch({ type: 'OPTIMISTIC_CONFIRM', itemId, qty })
@@ -515,9 +546,15 @@ export function Verificacion() {
         {
           onSuccess: () => {
             dispatch({ type: 'SERVER_CONFIRMED', itemId, qty })
+            confirmingRefs.current[itemId] = false
           },
           onError: () => {
             dispatch({ type: 'REVERT_CONFIRM', itemId })
+            confirmingRefs.current[itemId] = false
+            // Focus the OK button after revert so the operator can retry (H-11).
+            setTimeout(() => {
+              document.getElementById(`ok-${itemId}`)?.focus()
+            }, 0)
             setToast({
               visible: true,
               message: navigator.onLine
@@ -537,17 +574,25 @@ export function Verificacion() {
 
   const handleValidate = useCallback(() => {
     if (!id || !data) return
+    // Ref-level guard: blocks a second tap before validateMutation.isPending
+    // updates through a re-render (H-02).
+    if (validatingRef.current) return
+    validatingRef.current = true
 
     validateMutation.mutate(id, {
       onSuccess: () => {
+        validatingRef.current = false
         setShowValidated(true)
       },
       onError: (error) => {
+        validatingRef.current = false
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const status = (error as any)?.response?.status
         if (status === 409) {
           setToast({ visible: true, message: 'Esta entrega ya fue validada.' })
           setTimeout(() => navigate('/'), 1500)
+        } else if (!navigator.onLine) {
+          setToast({ visible: true, message: 'Sin conexión. Se va a guardar cuando vuelva la conexión.' })
         } else {
           setToast({ visible: true, message: 'No se pudo validar. Tocá de nuevo.' })
         }
@@ -667,7 +712,7 @@ export function Verificacion() {
         </button>
         <div>
           <p className="text-xs uppercase tracking-wide text-gray-400">ENTRADA</p>
-          <h1 className="text-base font-bold uppercase tracking-wide">
+          <h1 className="text-base font-bold uppercase tracking-wide truncate flex-1 min-w-0">
             {data?.supplier_name ?? ''}
           </h1>
         </div>
@@ -675,22 +720,36 @@ export function Verificacion() {
 
       {/* Item list */}
       <main className="flex-1 overflow-y-auto">
-        <p className="text-xs text-gray-400 px-4 py-2 border-b border-gray-200 bg-white">
-          al validar, la entrega impacta el stock
-        </p>
-        {orderedItems.map((item, idx) => (
-          <ItemRow
-            key={item.id}
-            item={item}
-            isFocused={idx === firstPendingIndex}
-            onConfirm={handleConfirm}
-            onEdit={(i) => setEditingItem(i)}
-          />
-        ))}
+        {totalCount === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full px-8 text-center gap-4 py-16">
+            <p className="text-gray-600 font-medium">
+              Esta entrega no tiene productos anunciados. Avisá al dueño.
+            </p>
+            <button
+              onClick={() => navigate('/')}
+              className="min-h-[48px] px-6 bg-gray-900 text-white font-semibold active:opacity-70"
+            >
+              Volver al inicio
+            </button>
+          </div>
+        ) : (
+          orderedItems.map((item, idx) => (
+            <ItemRow
+              key={item.id}
+              item={item}
+              isFocused={idx === firstPendingIndex}
+              onConfirm={handleConfirm}
+              onEdit={(i) => setEditingItem(i)}
+            />
+          ))
+        )}
       </main>
 
-      {/* Validate button */}
-      <div className="flex-shrink-0 px-4 py-3 bg-white border-t border-gray-200">
+      {/* Sticky footer: stock warning + validate button (H-06) */}
+      <footer className="sticky bottom-0 border-t border-gray-200 bg-white px-4 py-3 flex-shrink-0">
+        <p className="text-sm text-gray-600 text-center mb-2">
+          al validar, la entrega impacta el stock
+        </p>
         <button
           onClick={handleValidate}
           disabled={!allConfirmed || validateMutation.isPending}
@@ -706,7 +765,7 @@ export function Verificacion() {
             ? 'validando...'
             : `validar entrega (${confirmedCount}/${totalCount})`}
         </button>
-      </div>
+      </footer>
 
       {/* Edit modal (Pantalla 3) */}
       {editingItem && (

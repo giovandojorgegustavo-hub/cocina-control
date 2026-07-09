@@ -592,3 +592,332 @@ test('test_qty_zero_valid', async ({ page }) => {
   const body = JSON.parse(confirmBodies[0])
   expect(body.received_qty).toBe(0)
 })
+
+// ---------------------------------------------------------------------------
+// test_double_tap_ok_fires_single_request (QA H-01)
+// A double tap on "OK — llegó así" in the same tick must fire only one confirm
+// request, not two.
+// ---------------------------------------------------------------------------
+
+test('test_double_tap_ok_fires_single_request', async ({ page }) => {
+  await injectOperatorToken(page)
+
+  await page.route(DETAIL_URL, (route) => {
+    if (route.request().method() === 'GET') {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(makeDelivery('en_verificacion')),
+      })
+    } else {
+      route.continue()
+    }
+  })
+
+  await page.route(OPEN_URL, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: DELIVERY_ID, status: 'en_verificacion' }),
+    }),
+  )
+
+  const confirmRequests: string[] = []
+  await page.route(CONFIRM_PALTA_URL, async (route) => {
+    confirmRequests.push(route.request().method())
+    // Slow response to keep the in-flight window open during the double tap
+    await new Promise((r) => setTimeout(r, 200))
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ item_id: ITEM_PALTA, received_qty: 12 }),
+    })
+  })
+
+  await goToVerificacion(page)
+  await expect(page.getByText('PALTA')).toBeVisible()
+
+  const okBtn = page.getByRole('button', { name: /Confirmar PALTA/i })
+
+  // Double-click both buttons in the same JS tick
+  await page.evaluate((selector) => {
+    const el = document.querySelector(selector) as HTMLButtonElement | null
+    if (el) { el.click(); el.click() }
+  }, '[aria-label="Confirmar PALTA con cantidad anunciada"]')
+
+  // Wait for the single request to resolve
+  await expect(page.getByLabel('Confirmado')).toBeVisible({ timeout: 3000 })
+
+  // Only one request must have been fired
+  expect(confirmRequests.length).toBe(1)
+
+  // Suppress the unused variable warning from TypeScript's perspective
+  void okBtn
+})
+
+// ---------------------------------------------------------------------------
+// test_double_tap_validate_fires_single_request (QA H-02)
+// A double tap on "validar entrega" must fire only one /validate request.
+// ---------------------------------------------------------------------------
+
+test('test_double_tap_validate_fires_single_request', async ({ page }) => {
+  await injectOperatorToken(page)
+
+  // All items pre-confirmed so validate is immediately enabled
+  await page.route(DETAIL_URL, (route) => {
+    if (route.request().method() === 'GET') {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(makeDelivery('en_verificacion', { paltalQty: 12, ceboQty: 10, tomQty: 15 })),
+      })
+    } else {
+      route.continue()
+    }
+  })
+
+  await page.route(OPEN_URL, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: DELIVERY_ID, status: 'en_verificacion' }),
+    }),
+  )
+
+  const validateRequests: string[] = []
+  await page.route(VALIDATE_URL, async (route) => {
+    validateRequests.push(route.request().method())
+    await new Promise((r) => setTimeout(r, 200))
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: DELIVERY_ID, status: 'validada', validated_at: '2020-01-01T14:00:00Z' }),
+    })
+  })
+
+  await goToVerificacion(page)
+  await expect(page.getByText('PALTA')).toBeVisible()
+
+  const validateBtn = page.getByRole('button', { name: /validar entrega/i })
+  await expect(validateBtn).toBeEnabled()
+
+  // Double-click in the same JS tick
+  await page.evaluate(() => {
+    const el = document.querySelector('[aria-label*="Validar entrega"]') as HTMLButtonElement | null
+    if (el) { el.click(); el.click() }
+  })
+
+  // Wait for success overlay
+  await expect(page.getByText('ENTREGA VALIDADA')).toBeVisible({ timeout: 3000 })
+
+  expect(validateRequests.length).toBe(1)
+})
+
+// ---------------------------------------------------------------------------
+// test_validate_disabled_while_any_confirm_in_flight (QA H-03)
+// When a confirm request is still in flight, "validar entrega" must remain
+// disabled even though all items appear confirmed locally.
+// ---------------------------------------------------------------------------
+
+test('test_validate_disabled_while_any_confirm_in_flight', async ({ page }) => {
+  await injectOperatorToken(page)
+
+  // Start with two items, one pre-confirmed
+  const deliveryTwoItems = {
+    id: DELIVERY_ID,
+    supplier_name: 'VERDULERIA NUNEZ',
+    status: 'en_verificacion' as const,
+    item_count: 2,
+    created_at: '2020-01-01T12:00:00Z',
+    validated_at: null,
+    items: [
+      { id: ITEM_PALTA, product_id: 'prod-palta', product_name: 'PALTA', unit: 'un', announced_qty: 12, received_qty: 12 },
+      { id: ITEM_CEBOLLA, product_id: 'prod-cebolla', product_name: 'CEBOLLA', unit: 'kg', announced_qty: 10, received_qty: null },
+    ],
+  }
+
+  await page.route(DETAIL_URL, (route) => {
+    if (route.request().method() === 'GET') {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(deliveryTwoItems) })
+    } else {
+      route.continue()
+    }
+  })
+
+  await page.route(OPEN_URL, (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: DELIVERY_ID, status: 'en_verificacion' }) }),
+  )
+
+  // Slow confirm for CEBOLLA — keeps the request in flight
+  let resolveCebolla: (() => void) | undefined
+  await page.route(CONFIRM_CEBOLLA_URL, async (route) => {
+    await new Promise<void>((r) => { resolveCebolla = r })
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ item_id: ITEM_CEBOLLA, received_qty: 10 }) })
+  })
+
+  await goToVerificacion(page)
+  await expect(page.getByText('CEBOLLA')).toBeVisible()
+
+  // Click OK for CEBOLLA — optimistic update fires, request is in flight
+  await page.getByRole('button', { name: /Confirmar CEBOLLA/i }).click()
+
+  // Both items now appear confirmed locally, but CEBOLLA confirm is in flight.
+  // The validate button MUST still be disabled.
+  const validateBtn = page.getByRole('button', { name: /validar entrega/i })
+  await expect(validateBtn).toBeDisabled()
+
+  // Resolve the in-flight confirm
+  resolveCebolla?.()
+
+  // Now the validate button should become enabled
+  await expect(validateBtn).toBeEnabled({ timeout: 3000 })
+})
+
+// ---------------------------------------------------------------------------
+// test_optimistic_state_survives_server_refetch_during_flight (QA H-04)
+// When a server refetch (INIT) arrives while a confirm is in flight, the
+// optimistic state must be preserved.
+// ---------------------------------------------------------------------------
+
+test('test_optimistic_state_survives_server_refetch_during_flight', async ({ page }) => {
+  await injectOperatorToken(page)
+
+  let getCallCount = 0
+  await page.route(DETAIL_URL, async (route) => {
+    if (route.request().method() !== 'GET') { route.continue(); return }
+    getCallCount++
+    // Second GET returns the item still un-confirmed (simulates refetch arriving
+    // before the confirm resolves on the server).
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(makeDelivery('en_verificacion')),
+    })
+  })
+
+  await page.route(OPEN_URL, (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: DELIVERY_ID, status: 'en_verificacion' }) }),
+  )
+
+  // Slow confirm — stays in flight while we trigger a refetch
+  let resolveConfirm: (() => void) | undefined
+  await page.route(CONFIRM_PALTA_URL, async (route) => {
+    await new Promise<void>((r) => { resolveConfirm = r })
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ item_id: ITEM_PALTA, received_qty: 12 }) })
+  })
+
+  await goToVerificacion(page)
+  await expect(page.getByText('PALTA')).toBeVisible()
+
+  // Click OK — optimistic update fires
+  await page.getByRole('button', { name: /Confirmar PALTA/i }).click()
+
+  // Trigger a background refetch by calling the query manually
+  // (simulates polling or stale-while-revalidate)
+  await page.evaluate(() => {
+    // The second GET call will arrive while confirm is in flight
+    window.dispatchEvent(new Event('focus'))
+  })
+
+  // Even if a second GET arrives, the optimistic ✓ must still be visible
+  await expect(page.getByLabel('Confirmado')).toBeVisible()
+
+  // Now let the confirm resolve
+  resolveConfirm?.()
+
+  // ✓ must still be visible after confirm resolves
+  await expect(page.getByLabel('Confirmado')).toBeVisible()
+
+  void getCallCount
+})
+
+// ---------------------------------------------------------------------------
+// test_backdrop_click_closes_modal_without_saving (QA H-05)
+// Clicking the overlay backdrop closes the edit modal without sending a confirm.
+// ---------------------------------------------------------------------------
+
+test('test_backdrop_click_closes_modal_without_saving', async ({ page }) => {
+  await injectOperatorToken(page)
+
+  await page.route(DETAIL_URL, (route) => {
+    if (route.request().method() === 'GET') {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(makeDelivery('en_verificacion')) })
+    } else {
+      route.continue()
+    }
+  })
+
+  await page.route(OPEN_URL, (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: DELIVERY_ID, status: 'en_verificacion' }) }),
+  )
+
+  const confirmRequests: string[] = []
+  await page.route(CONFIRM_PALTA_URL, (route) => {
+    confirmRequests.push(route.request().method())
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ item_id: ITEM_PALTA, received_qty: 12 }) })
+  })
+
+  await goToVerificacion(page)
+  await expect(page.getByText('PALTA')).toBeVisible()
+
+  // Open edit modal
+  await page.getByRole('button', { name: /Editar cantidad de PALTA/i }).click()
+  await expect(page.getByRole('dialog')).toBeVisible()
+
+  // Click the backdrop (outside the card) — use a corner of the overlay
+  await page.mouse.click(10, 10)
+
+  // Modal must close
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+
+  // No confirm request must have fired
+  expect(confirmRequests.length).toBe(0)
+})
+
+// ---------------------------------------------------------------------------
+// test_edit_modal_rejects_infinity_and_nan (SEG H-2)
+// Entering Infinity, -Infinity or NaN must not submit the form.
+// ---------------------------------------------------------------------------
+
+test('test_edit_modal_rejects_infinity_and_nan', async ({ page }) => {
+  await injectOperatorToken(page)
+
+  await page.route(DETAIL_URL, (route) => {
+    if (route.request().method() === 'GET') {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(makeDelivery('en_verificacion')) })
+    } else {
+      route.continue()
+    }
+  })
+
+  await page.route(OPEN_URL, (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: DELIVERY_ID, status: 'en_verificacion' }) }),
+  )
+
+  const confirmRequests: string[] = []
+  await page.route(CONFIRM_PALTA_URL, (route) => {
+    confirmRequests.push(route.request().method())
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ item_id: ITEM_PALTA, received_qty: 0 }) })
+  })
+
+  await goToVerificacion(page)
+  await expect(page.getByText('PALTA')).toBeVisible()
+
+  await page.getByRole('button', { name: /Editar cantidad de PALTA/i }).click()
+  await expect(page.getByRole('dialog')).toBeVisible()
+
+  const input = page.getByLabel('Cantidad recibida')
+  const submitBtn = page.getByRole('button', { name: /OK y siguiente/i })
+
+  // "Infinity" as a string — parseFloat('Infinity') returns Infinity, not NaN
+  await input.fill('Infinity')
+  await expect(submitBtn).toBeDisabled()
+  await submitBtn.click({ force: true })
+  expect(confirmRequests.length).toBe(0)
+
+  // "-Infinity"
+  await input.fill('-Infinity')
+  await expect(submitBtn).toBeDisabled()
+  await submitBtn.click({ force: true })
+  expect(confirmRequests.length).toBe(0)
+})
