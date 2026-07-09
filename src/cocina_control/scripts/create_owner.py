@@ -38,12 +38,17 @@ def main() -> None:
         print("ERROR: password cannot be empty.", file=sys.stderr)
         sys.exit(1)
 
+    if len(password) < 8:
+        print("ERROR: password must be at least 8 characters.", file=sys.stderr)
+        sys.exit(1)
+
     password_confirm = getpass.getpass("Confirm password: ")
     if password != password_confirm:
         print("ERROR: passwords do not match.", file=sys.stderr)
         sys.exit(1)
 
     from sqlalchemy import select
+    from sqlalchemy.exc import OperationalError
 
     from cocina_control.db import build_engine, build_session_factory
     from cocina_control.models.user import User
@@ -55,22 +60,30 @@ def main() -> None:
 
     email = args.email.lower()
 
-    with SessionLocal() as session:
-        existing = session.scalar(select(User).where(User.email == email))
-        if existing is not None:
-            print(f"ERROR: a user with email '{email}' already exists.", file=sys.stderr)
-            sys.exit(1)
+    try:
+        with SessionLocal() as session:
+            existing = session.scalar(select(User).where(User.email == email))
+            if existing is not None:
+                print(f"ERROR: a user with email '{email}' already exists.", file=sys.stderr)
+                sys.exit(1)
 
-        owner = User(
-            id=uuid.uuid4(),
-            name=args.name,
-            email=email,
-            password_hash=hash_password(password),
-            role="owner",
-            created_at=datetime.now(UTC),
+            owner = User(
+                id=uuid.uuid4(),
+                name=args.name,
+                email=email,
+                password_hash=hash_password(password),
+                role="owner",
+                created_at=datetime.now(UTC),
+            )
+            session.add(owner)
+            session.commit()
+    except OperationalError:
+        print(
+            "ERROR: could not connect to the database. "
+            "Check that COCINA_DATABASE_URL is correct and the server is reachable.",
+            file=sys.stderr,
         )
-        session.add(owner)
-        session.commit()
+        sys.exit(1)
 
     print(f"Owner user created: {email}")
 

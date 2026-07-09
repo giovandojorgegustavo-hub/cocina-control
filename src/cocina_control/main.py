@@ -1,10 +1,16 @@
-from typing import Annotated
+from fastapi import FastAPI
 
-from fastapi import Depends, FastAPI
+# IMPORTANT: ProxyHeadersMiddleware is required when running behind Caddy (or
+# any reverse proxy on the same host).  Without it, request.client.host is
+# always 127.0.0.1 (loopback), which makes the per-IP rate limiter useless.
+# The operator MUST configure Caddy to forward the real client IP via the
+# X-Forwarded-For header.  trusted_hosts is restricted to loopback only —
+# only traffic that arrives via the local Caddy process is trusted.
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from cocina_control.api.auth import router as auth_router
 from cocina_control.api.health import router as health_router
-from cocina_control.models.user import User
+from cocina_control.config import get_settings
 
 app = FastAPI(
     title="Cocina Control API",
@@ -12,35 +18,22 @@ app = FastAPI(
     description="Dark-kitchen inventory system API",
 )
 
+# Trust X-Forwarded-For only from loopback (Caddy runs on the same droplet).
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["127.0.0.1", "localhost"])
+
 app.include_router(health_router)
 app.include_router(auth_router)
 
 # ---------------------------------------------------------------------------
-# Test-only endpoint
+# Test-only endpoints
 #
-# This route is always registered but carries include_in_schema=False so it
-# never appears in the production OpenAPI spec.  An additional runtime guard
-# checks app_env: if it is "prod" the endpoint returns 404 immediately.
-# We cannot evaluate get_settings() at import time because COCINA_DATABASE_URL
-# may not be present during test collection (the URL is injected by the
-# db_engine fixture).
+# In non-prod environments the test router is included so that the test suite
+# can exercise role enforcement without shipping a real protected resource.
+# In production (app_env == "prod") the router is never registered, so the
+# path returns a genuine 404 — not a guarded 401/403.
 # ---------------------------------------------------------------------------
-from cocina_control.api.deps import require_role  # noqa: E402
+settings = get_settings()
+if settings.app_env != "prod":
+    from cocina_control.api.test_endpoints import router as test_router  # noqa: PLC0415
 
-
-@app.get("/api/v1/_test/protected-owner", include_in_schema=False)
-async def _test_protected_owner(
-    user: Annotated[User, Depends(require_role("owner"))],
-) -> dict:
-    """Owner-only endpoint used exclusively by the test suite.
-
-    In production (app_env == 'prod') this returns 404 so it is effectively
-    unreachable even if someone discovers the path.
-    """
-    from fastapi import HTTPException
-
-    from cocina_control.config import get_settings
-
-    if get_settings().app_env == "prod":
-        raise HTTPException(status_code=404)
-    return {"user_id": str(user.id), "role": user.role}
+    app.include_router(test_router, prefix="/api/v1", tags=["_test"])

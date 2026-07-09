@@ -5,14 +5,16 @@ Every test runs in a SAVEPOINT that is rolled back afterwards, so user
 records created here never persist to other tests.
 """
 
+import statistics
 import subprocess
 import sys
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 
 import jwt
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.orm import Session
 
 from cocina_control.models.user import User
@@ -138,6 +140,34 @@ async def test_login_email_case_insensitive(client: AsyncClient, db_session: Ses
 
 
 @pytest.mark.asyncio
+async def test_login_password_too_long_returns_422(client: AsyncClient) -> None:
+    """A password longer than 128 characters must return 422, not 500.
+
+    FastAPI validates the LoginRequest model before the handler runs, so the
+    max_length=128 constraint on the password field produces a 422 Unprocessable
+    Entity response without ever reaching bcrypt.
+    """
+    reset_rate_limit("testclient")
+    long_password = "a" * 129
+    response = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "any@test.com", "password": long_password},
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_login_empty_password_returns_422(client: AsyncClient) -> None:
+    """An empty password must return 422 (min_length=1 on the field)."""
+    reset_rate_limit("testclient")
+    response = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "any@test.com", "password": ""},
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_login_expired_token_returns_401(
     client: AsyncClient, owner_user: User
 ) -> None:
@@ -162,10 +192,19 @@ async def test_login_expired_token_returns_401(
 async def test_login_tampered_signature_returns_401(
     client: AsyncClient, owner_token: str
 ) -> None:
-    """Modifying any character of a valid token must yield 401."""
-    # Flip the last character of the signature segment
+    """Modifying the payload segment of a valid token must yield 401.
+
+    We alter a character in the middle of the second segment (payload) rather
+    than the last character of the signature, because mutating the signature
+    tail can occasionally produce a cryptographically equivalent base64 value.
+    Mutating the payload always invalidates the MAC.
+    """
     parts = owner_token.split(".")
-    parts[-1] = parts[-1][:-1] + ("A" if parts[-1][-1] != "A" else "B")
+    payload_b64 = parts[1]
+    mid = len(payload_b64) // 2
+    # Replace the character at the midpoint with a different one
+    replacement = "A" if payload_b64[mid] != "A" else "B"
+    parts[1] = payload_b64[:mid] + replacement + payload_b64[mid + 1:]
     tampered = ".".join(parts)
 
     response = await client.get(
@@ -173,6 +212,86 @@ async def test_login_tampered_signature_returns_401(
         headers={"Authorization": f"Bearer {tampered}"},
     )
     assert response.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Test: timing attack resistance
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.timing
+@pytest.mark.asyncio
+async def test_login_timing_similar_for_missing_and_wrong_password(
+    db_session: Session,
+) -> None:
+    """Response time for missing email must be similar to wrong password.
+
+    Both paths call verify_password() — missing email uses a pre-computed dummy
+    hash so the response time is constant-time regardless of whether the account
+    exists.
+
+    Threshold: median latency difference < 30 ms.  This test is marked
+    @pytest.mark.timing and can be excluded in CI with: pytest -m "not timing"
+    """
+    from cocina_control.db import get_session
+    from cocina_control.main import app
+
+    def _override():
+        yield db_session
+
+    app.dependency_overrides[get_session] = _override
+
+    existing_email = f"timing-owner-{uuid.uuid4().hex[:6]}@test.com"
+    create_test_user(db_session, "owner", existing_email)
+
+    samples = 10
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        # Warm up bcrypt cache (JIT effects)
+        reset_rate_limit("testclient")
+        await ac.post(
+            "/api/v1/auth/login",
+            json={"email": "warmup@nowhere.com", "password": "warmup-pass"},
+        )
+        reset_rate_limit("testclient")
+        await ac.post(
+            "/api/v1/auth/login",
+            json={"email": existing_email, "password": "warmup-wrong"},
+        )
+
+        missing_times: list[float] = []
+        wrong_times: list[float] = []
+
+        for _ in range(samples):
+            reset_rate_limit("testclient")
+            t0 = time.perf_counter()
+            await ac.post(
+                "/api/v1/auth/login",
+                json={"email": f"notexist-{uuid.uuid4().hex}@nowhere.com", "password": "pass"},
+            )
+            missing_times.append((time.perf_counter() - t0) * 1000)
+
+            reset_rate_limit("testclient")
+            t0 = time.perf_counter()
+            await ac.post(
+                "/api/v1/auth/login",
+                json={"email": existing_email, "password": "wrong-password"},
+            )
+            wrong_times.append((time.perf_counter() - t0) * 1000)
+
+    app.dependency_overrides.pop(get_session, None)
+
+    median_missing = statistics.median(missing_times)
+    median_wrong = statistics.median(wrong_times)
+    diff_ms = abs(median_missing - median_wrong)
+
+    assert diff_ms < 30, (
+        f"Timing difference too large — suggests user enumeration vulnerability. "
+        f"Median missing={median_missing:.1f}ms, wrong={median_wrong:.1f}ms, "
+        f"diff={diff_ms:.1f}ms (threshold: 30ms)"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -252,12 +371,22 @@ async def test_role_reread_from_db_not_token(
 
 
 @pytest.mark.asyncio
-async def test_logout_returns_204(client: AsyncClient, owner_token: str) -> None:
+async def test_logout_with_valid_token_returns_204(
+    client: AsyncClient, owner_token: str
+) -> None:
+    """Logout with a valid Bearer token returns 204."""
     response = await client.post(
         "/api/v1/auth/logout",
         headers={"Authorization": f"Bearer {owner_token}"},
     )
     assert response.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_logout_without_token_returns_401(client: AsyncClient) -> None:
+    """Logout without a Bearer token must return 401."""
+    response = await client.post("/api/v1/auth/logout")
+    assert response.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +415,7 @@ def test_create_owner_script_creates_user(postgres_url: str) -> None:
     env = {
         **os.environ,
         "COCINA_DATABASE_URL": postgres_url,
-        "COCINA_JWT_SECRET": "test-secret-not-for-prod",
+        "COCINA_JWT_SECRET": "test-secret-not-for-prod-min-32-chars-1234",
     }
 
     result = subprocess.run(
@@ -340,3 +469,63 @@ async def test_rate_limit_blocks_sixth_attempt(
         json={"email": owner_user.email, "password": "wrong"},
     )
     assert response.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_uses_forwarded_for_when_proxy_configured(
+    db_session: Session,
+) -> None:
+    """Rate limit counters key off X-Forwarded-For when the proxy middleware is active.
+
+    The ProxyHeadersMiddleware (trusted_hosts=["127.0.0.1", "localhost"]) rewrites
+    request.client.host with the value from X-Forwarded-For when the connection
+    comes from a trusted upstream.  This test simulates two clients with distinct
+    forwarded IPs and verifies that exhausting one counter does not affect the other.
+    """
+    from cocina_control.db import get_session
+    from cocina_control.main import app
+    from cocina_control.security.rate_limit import reset as rl_reset
+
+    def _override():
+        yield db_session
+
+    app.dependency_overrides[get_session] = _override
+
+    ip_a = "10.0.0.1"
+    ip_b = "10.0.0.2"
+
+    rl_reset(ip_a)
+    rl_reset(ip_b)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        # Exhaust the rate limit for ip_a (5 attempts)
+        for _ in range(5):
+            await ac.post(
+                "/api/v1/auth/login",
+                json={"email": "any@test.com", "password": "wrong"},
+                headers={"X-Forwarded-For": ip_a},
+            )
+
+        # ip_a must now be rate-limited
+        resp_a = await ac.post(
+            "/api/v1/auth/login",
+            json={"email": "any@test.com", "password": "wrong"},
+            headers={"X-Forwarded-For": ip_a},
+        )
+        assert resp_a.status_code == 429, "ip_a should be rate-limited after 5 attempts"
+
+        # ip_b must still be allowed (different counter)
+        resp_b = await ac.post(
+            "/api/v1/auth/login",
+            json={"email": "any@test.com", "password": "wrong"},
+            headers={"X-Forwarded-For": ip_b},
+        )
+        assert resp_b.status_code != 429, (
+            f"ip_b should NOT be rate-limited — got {resp_b.status_code}"
+        )
+
+    app.dependency_overrides.pop(get_session, None)
+    rl_reset(ip_a)
+    rl_reset(ip_b)

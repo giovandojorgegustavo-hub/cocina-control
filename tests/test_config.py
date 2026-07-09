@@ -3,10 +3,11 @@ import pytest
 from cocina_control.config import Settings
 
 _DUMMY_DB_URL = "postgresql+psycopg://user:pass@localhost/db"
+_VALID_SECRET = "test-secret-not-for-prod-min-32-chars-1234"
 
 
 def test_default_settings() -> None:
-    s = Settings(database_url=_DUMMY_DB_URL)
+    s = Settings(database_url=_DUMMY_DB_URL, jwt_secret=_VALID_SECRET)
 
     assert s.app_env == "dev"
     assert s.log_level == "INFO"
@@ -17,6 +18,7 @@ def test_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COCINA_APP_ENV", "production")
     monkeypatch.setenv("COCINA_LOG_LEVEL", "WARNING")
     monkeypatch.setenv("COCINA_DATABASE_URL", _DUMMY_DB_URL)
+    monkeypatch.setenv("COCINA_JWT_SECRET", _VALID_SECRET)
 
     s = Settings()
 
@@ -39,3 +41,33 @@ def test_database_url_required() -> None:
     finally:
         if env_backup is not None:
             os.environ["COCINA_DATABASE_URL"] = env_backup
+
+
+def test_config_jwt_secret_too_short_rejected() -> None:
+    """Settings must raise ValidationError when jwt_secret is shorter than 32 chars."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="jwt_secret must be at least 32 characters"):
+        Settings(database_url=_DUMMY_DB_URL, jwt_secret="short")
+
+
+def test_config_jwt_secret_exactly_32_chars_accepted() -> None:
+    """A jwt_secret of exactly 32 characters must be accepted."""
+    secret_32 = "a" * 32
+    s = Settings(database_url=_DUMMY_DB_URL, jwt_secret=secret_32)
+    assert s.jwt_secret == secret_32
+
+
+def test_config_jwt_secret_required() -> None:
+    """Settings must raise ValidationError when jwt_secret is missing entirely."""
+    import os
+
+    from pydantic import ValidationError
+
+    env_backup = os.environ.pop("COCINA_JWT_SECRET", None)
+    try:
+        with pytest.raises(ValidationError, match="jwt_secret"):
+            Settings(database_url=_DUMMY_DB_URL)
+    finally:
+        if env_backup is not None:
+            os.environ["COCINA_JWT_SECRET"] = env_backup

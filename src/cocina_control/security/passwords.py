@@ -14,12 +14,34 @@ import bcrypt
 
 BCRYPT_ROUNDS: int = 12
 
+# bcrypt silently truncates inputs longer than 72 bytes.  We enforce this
+# limit explicitly so callers get a clear error instead of silent truncation.
+_BCRYPT_MAX_BYTES = 72
+
 
 def hash_password(plain: str) -> str:
-    """Return a bcrypt hash of *plain*."""
-    return bcrypt.hashpw(plain.encode(), bcrypt.gensalt(rounds=BCRYPT_ROUNDS)).decode()
+    """Return a bcrypt hash of *plain*.
+
+    Raises ValueError if *plain* encodes to more than 72 bytes (bcrypt limit).
+    """
+    encoded = plain.encode()
+    if len(encoded) > _BCRYPT_MAX_BYTES:
+        raise ValueError(
+            f"Password exceeds bcrypt limit of {_BCRYPT_MAX_BYTES} bytes "
+            f"(got {len(encoded)} bytes). Use a shorter password."
+        )
+    return bcrypt.hashpw(encoded, bcrypt.gensalt(rounds=BCRYPT_ROUNDS)).decode()
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    """Return True if *plain* matches *hashed*."""
-    return bcrypt.checkpw(plain.encode(), hashed.encode())
+    """Return True if *plain* matches *hashed*.
+
+    Raises ValueError if *plain* encodes to more than 72 bytes (bcrypt limit).
+    """
+    encoded = plain.encode()
+    if len(encoded) > _BCRYPT_MAX_BYTES:
+        raise ValueError(
+            f"Password exceeds bcrypt limit of {_BCRYPT_MAX_BYTES} bytes "
+            f"(got {len(encoded)} bytes). Use a shorter password."
+        )
+    return bcrypt.checkpw(encoded, hashed.encode())

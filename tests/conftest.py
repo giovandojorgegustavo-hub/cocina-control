@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 # module-level engine singleton in db.py is never used in tests because
 # every test overrides the get_session dependency.
 # ---------------------------------------------------------------------------
-os.environ.setdefault("COCINA_JWT_SECRET", "test-secret-not-for-prod")
+os.environ.setdefault("COCINA_JWT_SECRET", "test-secret-not-for-prod-min-32-chars-1234")
 os.environ.setdefault(
     "COCINA_DATABASE_URL", "postgresql+psycopg://test:test@localhost/test_placeholder"
 )
