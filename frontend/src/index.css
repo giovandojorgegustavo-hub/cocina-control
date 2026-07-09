@@ -1,0 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Minimum touch target: 48x48px per WCAG 2.5.5 */
+button, a, [role="button"] {
+  min-height: 48px;
+  min-width: 48px;
+}
