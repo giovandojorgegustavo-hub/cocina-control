@@ -82,7 +82,8 @@ from cocina_control.schemas.inventory import (
     InventoryItemCorrect,
     InventoryItemCorrectionResponse,
     InventoryItemCreate,
-    InventoryItemResponse,
+    InventoryItemResponseOperator,
+    InventoryItemResponseOwner,
 )
 from cocina_control.security.time_windows import is_same_calendar_day_argentina
 
@@ -163,13 +164,20 @@ def _get_leaf_item_or_404(
 
 
 def _build_item_responses(
-    session: Session, count_id: uuid.UUID
-) -> list[InventoryItemResponse]:
+    session: Session,
+    count_id: uuid.UUID,
+    viewer_role: str,
+) -> list[InventoryItemResponseOwner | InventoryItemResponseOperator]:
     """Return ALL items for this session, resolved with product_name.
 
-    Returns all items (original + corrections) so the client can build the
-    full correction chain.  The GET endpoint filters to leaf-only items before
-    returning to the caller.
+    Returns all items (original + corrections) so the caller can filter to
+    leaf-only items before returning to the client.
+
+    viewer_role controls which schema is used:
+    - "owner": InventoryItemResponseOwner  (includes corrects_id + reason)
+    - "operator" or any other role: InventoryItemResponseOperator  (excludes
+      both fields to prevent the operator from reconstructing correction chains
+      and inferring previous values — requerimientos.md §1)
 
     IMPORTANT: This function intentionally omits any 'expected_qty' or stock
     comparison.  The operator must count blind (requerimientos.md §1).
@@ -189,34 +197,59 @@ def _build_item_responses(
         for p in session.scalars(select(Product).where(Product.id.in_(product_ids))).all()
     }
 
-    responses = []
+    responses: list[InventoryItemResponseOwner | InventoryItemResponseOperator] = []
     for item in all_items:
         product = products.get(item.product_id)
         if product is None:
+            log.error(
+                "data_integrity_item_missing_product",
+                extra={
+                    "count_id": str(count_id),
+                    "item_id": str(item.id),
+                    "product_id": str(item.product_id),
+                },
+            )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Data integrity error: item references missing product",
             )
-        responses.append(
-            InventoryItemResponse(
-                id=item.id,
-                product_id=item.product_id,
-                product_name=product.name,
-                quantity=item.quantity,
-                corrects_id=item.corrects_id,
-                reason=item.reason,
+        if viewer_role == "owner":
+            responses.append(
+                InventoryItemResponseOwner(
+                    id=item.id,
+                    product_id=item.product_id,
+                    product_name=product.name,
+                    quantity=item.quantity,
+                    corrects_id=item.corrects_id,
+                    reason=item.reason,
+                )
             )
-        )
+        else:
+            responses.append(
+                InventoryItemResponseOperator(
+                    id=item.id,
+                    product_id=item.product_id,
+                    product_name=product.name,
+                    quantity=item.quantity,
+                )
+            )
     return responses
 
 
-def _count_to_response(session: Session, count: InventoryCount) -> InventoryCountResponse:
+def _count_to_response(
+    session: Session, count: InventoryCount, viewer_role: str
+) -> InventoryCountResponse:
     """Build the full count response with leaf-only items.
 
     Leaf items = items not referenced by any other item's corrects_id.
     These represent the current (most-recent) state of each counted product.
+
+    viewer_role is forwarded to _build_item_responses to select the correct
+    response schema:
+    - "owner": full fields including corrects_id + reason
+    - "operator": stripped view without corrects_id or reason
     """
-    all_item_responses = _build_item_responses(session, count.id)
+    all_item_responses = _build_item_responses(session, count.id, viewer_role)
 
     # Compute corrected IDs to filter leaves.
     all_items = session.scalars(
@@ -291,7 +324,7 @@ def start_count(
 def get_count(
     count_id: uuid.UUID,
     session: Session = Depends(get_session),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> InventoryCountResponse:
     """Return the current state of a count session including leaf items.
 
@@ -301,9 +334,28 @@ def get_count(
     CRITICAL: The response MUST NOT include any expected_qty, previous count,
     stock level, or any comparison value.  The operator counts blind.
     See requerimientos.md §Principio 1 and docs/diseno.md §2.c Q9.
+
+    Access control (operator)
+    --------------------------
+    Operators may only read their own session while it is in_progress.
+    Completed sessions — even their own — are not accessible to operators:
+    a completed count contains the full count record which could be used
+    to reconstruct expected values on a subsequent count (violates §1).
+    Any other session (different owner or completed) returns 403 — NOT 404 —
+    to avoid leaking the existence of count UUIDs via enumeration.
+
+    Owners can read any session in any status.
     """
     count = _get_count_or_404(session, count_id)
-    return _count_to_response(session, count)
+
+    if current_user.role == "operator":
+        if count.started_by != current_user.id or count.status != "in_progress":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden",
+            )
+
+    return _count_to_response(session, count, current_user.role)
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +365,7 @@ def get_count(
 
 @router.post(
     "/{count_id}/items",
-    response_model=InventoryItemResponse,
+    response_model=InventoryItemResponseOperator,
     status_code=status.HTTP_201_CREATED,
     summary="Register a product count in the session (operator only)",
 )
@@ -322,7 +374,7 @@ def add_item(
     body: InventoryItemCreate,
     session: Session = Depends(get_session),
     current_user: User = Depends(require_role("operator")),
-) -> InventoryItemResponse:
+) -> InventoryItemResponseOperator:
     """Record the counted quantity for a product within a count session.
 
     Validations:
@@ -377,13 +429,11 @@ def add_item(
     session.add(item)
     session.flush()
 
-    return InventoryItemResponse(
+    return InventoryItemResponseOperator(
         id=item.id,
         product_id=item.product_id,
         product_name=product.name,
         quantity=item.quantity,
-        corrects_id=item.corrects_id,
-        reason=item.reason,
     )
 
 
@@ -453,9 +503,17 @@ def correct_item(
 
     now = datetime.now(UTC)
 
-    # Enforce time-window for operators — anchored to item.created_at.
-    # See module docstring for the rationale vs. session.completed_at.
+    # Enforce ownership and time-window for operators.
+    # Ownership is checked BEFORE the time window so that an operator cannot
+    # probe whether another operator's session exists by testing the time window.
     if current_user.role == "operator":
+        if count.started_by != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden",
+            )
+        # Enforce time-window anchored to item.created_at.
+        # See module docstring for the rationale vs. session.completed_at.
         if not is_same_calendar_day_argentina(item.created_at, now):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -481,7 +539,6 @@ def correct_item(
     try:
         session.flush()
     except IntegrityError as exc:
-        session.rollback()
         constraint = getattr(exc.orig, "diag", None)
         constraint_name = (
             constraint.constraint_name if constraint is not None else str(exc.orig)
@@ -546,10 +603,35 @@ def complete_count(
     Concurrency: SELECT FOR UPDATE serialises two concurrent /complete calls
     on the same session.  The second reads status == completed and returns 409.
 
-    Both operator and owner can complete a count.
+    Access control (operator)
+    --------------------------
+    Operators can only complete their own session.  Attempting to complete
+    another operator's session returns 403.  Owner can complete any session.
+
+    Active products snapshot
+    ------------------------
+    The list of required products is evaluated at the moment /complete is
+    called using the current is_active = true catalogue — NOT a snapshot from
+    when the session started.  Rationale:
+
+    - The catalogue is dynamic: products can be activated or deactivated
+      between start and complete.
+    - A product deactivated after start is no longer sold, so blocking the
+      count for it would be incorrect.
+    - A product activated after start is now part of the catalogue and must
+      be counted.
+    - This avoids locking sessions to a stale catalogue and is consistent
+      with the dynamic nature of the product list.
     """
     # Lock to prevent race on /complete.
     count = _get_count_for_update_or_404(session, count_id)
+
+    # Ownership check for operator: cannot complete another operator's session.
+    if current_user.role == "operator" and count.started_by != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden",
+        )
 
     if count.status not in _COUNTABLE_STATUSES:
         raise HTTPException(

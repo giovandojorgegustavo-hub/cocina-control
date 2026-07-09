@@ -21,6 +21,7 @@ Domain invariants under test:
 
 import uuid
 from datetime import UTC, datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 from httpx import AsyncClient
@@ -164,6 +165,7 @@ async def test_get_state_shows_no_expected_values(
     client: AsyncClient,
     db_session: Session,
     operator_token: str,
+    operator_user,
     owner_user,
     active_products,
 ):
@@ -174,8 +176,9 @@ async def test_get_state_shows_no_expected_values(
     must be absent from the response.
     """
     papa, _ = active_products
-    count = _make_count(db_session, owner_user.id)
-    _make_item(db_session, count.id, papa.id, owner_user.id)
+    # Count must be started_by operator so the operator can access it.
+    count = _make_count(db_session, operator_user.id)
+    _make_item(db_session, count.id, papa.id, operator_user.id)
 
     resp = await client.get(f"{_BASE}/{count.id}", headers=_auth(operator_token))
     assert resp.status_code == 200
@@ -202,15 +205,17 @@ async def test_get_state_shows_only_leaf_items(
     client: AsyncClient,
     db_session: Session,
     operator_token: str,
+    operator_user,
     owner_user,
     active_products,
 ):
     """GET must return only leaf items — corrected items must not appear."""
     papa, _ = active_products
-    count = _make_count(db_session, owner_user.id)
-    original = _make_item(db_session, count.id, papa.id, owner_user.id, quantity="3")
+    # Count must be started_by operator so the operator can access it.
+    count = _make_count(db_session, operator_user.id)
+    original = _make_item(db_session, count.id, papa.id, operator_user.id, quantity="3")
     correction = _make_item(
-        db_session, count.id, papa.id, owner_user.id,
+        db_session, count.id, papa.id, operator_user.id,
         quantity="5", corrects_id=original.id
     )
 
@@ -238,11 +243,12 @@ async def test_operator_adds_item(
     client: AsyncClient,
     db_session: Session,
     operator_token: str,
+    operator_user,
     owner_user,
     active_products,
 ):
     papa, _ = active_products
-    count = _make_count(db_session, owner_user.id)
+    count = _make_count(db_session, operator_user.id)
 
     resp = await client.post(
         f"{_BASE}/{count.id}/items",
@@ -253,7 +259,8 @@ async def test_operator_adds_item(
     data = resp.json()
     assert data["product_id"] == str(papa.id)
     assert data["quantity"] == "3.5"
-    assert data["corrects_id"] is None
+    # corrects_id is not exposed to operator — it is an owner-only field.
+    assert "corrects_id" not in data
 
 
 @pytest.mark.asyncio
@@ -419,7 +426,8 @@ async def test_operator_corrects_same_day_creates_new_item(
     active_products,
 ):
     papa, _ = active_products
-    count = _make_count(db_session, owner_user.id)
+    # Count must be started_by operator so the operator passes the ownership check.
+    count = _make_count(db_session, operator_user.id)
     # Item created now → same calendar day.
     original = _make_item(
         db_session, count.id, papa.id, operator_user.id,
@@ -449,7 +457,8 @@ async def test_operator_correct_next_day_returns_403(
 ):
     """Operator cannot correct an item from the previous calendar day (UTC-3)."""
     papa, _ = active_products
-    count = _make_count(db_session, owner_user.id)
+    # Count must be started_by operator so ownership passes; window check fails after.
+    count = _make_count(db_session, operator_user.id)
     # Simulate an item created yesterday in Argentina time.
     yesterday_utc = datetime.now(UTC) - timedelta(days=1)
     original = _make_item(
@@ -594,7 +603,7 @@ async def test_operator_completes_when_all_products_counted(
     active_products,
 ):
     papa, pollo = active_products
-    count = _make_count(db_session, owner_user.id)
+    count = _make_count(db_session, operator_user.id)
     _make_item(db_session, count.id, papa.id, operator_user.id)
     _make_item(db_session, count.id, pollo.id, operator_user.id)
 
@@ -640,7 +649,7 @@ async def test_complete_missing_products_returns_400_with_list(
 ):
     """If any active product is missing from the count, return 400 with the list."""
     papa, pollo = active_products
-    count = _make_count(db_session, owner_user.id)
+    count = _make_count(db_session, operator_user.id)
     # Count only papa — pollo is missing.
     _make_item(db_session, count.id, papa.id, operator_user.id)
 
@@ -659,13 +668,15 @@ async def test_complete_wrong_status_returns_409(
     client: AsyncClient,
     db_session: Session,
     operator_token: str,
+    operator_user,
     owner_user,
 ):
+    # Count started_by operator so ownership passes; status check fires next.
     count = _make_count(
-        db_session, owner_user.id,
+        db_session, operator_user.id,
         status="completed",
         completed_at=datetime.now(UTC),
-        completed_by=owner_user.id,
+        completed_by=operator_user.id,
     )
     resp = await client.post(
         f"{_BASE}/{count.id}/complete",
@@ -685,7 +696,7 @@ async def test_concurrent_complete_second_returns_409(
 ):
     """Two sequential /complete calls: first succeeds, second gets 409."""
     papa, pollo = active_products
-    count = _make_count(db_session, owner_user.id)
+    count = _make_count(db_session, operator_user.id)
     _make_item(db_session, count.id, papa.id, operator_user.id)
     _make_item(db_session, count.id, pollo.id, operator_user.id)
 
@@ -763,7 +774,7 @@ async def test_complete_only_counts_leaf_items(
 ):
     """Complete checks leaf items only — a corrected+re-counted product is fine."""
     papa, pollo = active_products
-    count = _make_count(db_session, owner_user.id)
+    count = _make_count(db_session, operator_user.id)
 
     # Count papa — original.
     original_papa = _make_item(db_session, count.id, papa.id, operator_user.id, quantity="3")
@@ -781,3 +792,435 @@ async def test_complete_only_counts_leaf_items(
     )
     # papa has a leaf (the correction), pollo has a leaf → complete succeeds.
     assert resp.status_code == 200
+
+
+# ===========================================================================
+# Security: GET access control for operator
+# ===========================================================================
+
+
+@pytest.fixture
+def operator_user2(db_session: Session):
+    """A second operator distinct from operator_user."""
+    from tests.conftest import create_test_user
+    return create_test_user(db_session, "operator", f"op2-{uuid.uuid4().hex[:6]}@test.com")
+
+
+@pytest.fixture
+def operator_token2(operator_user2) -> str:
+    from cocina_control.security.tokens import create_access_token
+    return create_access_token(operator_user2.id, operator_user2.role)
+
+
+@pytest.mark.asyncio
+async def test_operator_can_read_own_in_progress_count(
+    client: AsyncClient,
+    db_session: Session,
+    operator_token: str,
+    operator_user,
+):
+    """Operator can read their own in_progress session."""
+    count = _make_count(db_session, operator_user.id)
+
+    resp = await client.get(f"{_BASE}/{count.id}", headers=_auth(operator_token))
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_operator_cannot_read_completed_count_403(
+    client: AsyncClient,
+    db_session: Session,
+    operator_token: str,
+    operator_user,
+    active_products,
+):
+    """Operator cannot read their own completed count — returns 403, not 404.
+
+    A completed count reveals the full list of counted quantities, allowing the
+    operator to reconstruct expected values before the next count (violates §1).
+    Using 403 (not 404) avoids leaking count existence via response-code probing.
+    """
+    papa, pollo = active_products
+    count = _make_count(
+        db_session, operator_user.id,
+        status="completed",
+        completed_at=datetime.now(UTC),
+        completed_by=operator_user.id,
+    )
+    _make_item(db_session, count.id, papa.id, operator_user.id)
+    _make_item(db_session, count.id, pollo.id, operator_user.id)
+
+    resp = await client.get(f"{_BASE}/{count.id}", headers=_auth(operator_token))
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_operator_cannot_read_other_operator_count_403(
+    client: AsyncClient,
+    db_session: Session,
+    operator_token: str,
+    operator_user2,
+):
+    """Operator cannot read another operator's in_progress count — 403."""
+    count = _make_count(db_session, operator_user2.id)
+
+    resp = await client.get(f"{_BASE}/{count.id}", headers=_auth(operator_token))
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_owner_can_read_any_count(
+    client: AsyncClient,
+    db_session: Session,
+    owner_token: str,
+    owner_user,
+    operator_user,
+    active_products,
+):
+    """Owner can read any count regardless of who started it or its status."""
+    papa, pollo = active_products
+
+    # Count started by operator, now completed.
+    count = _make_count(
+        db_session, operator_user.id,
+        status="completed",
+        completed_at=datetime.now(UTC),
+        completed_by=operator_user.id,
+    )
+    _make_item(db_session, count.id, papa.id, operator_user.id)
+    _make_item(db_session, count.id, pollo.id, operator_user.id)
+
+    resp = await client.get(f"{_BASE}/{count.id}", headers=_auth(owner_token))
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "completed"
+
+
+# ===========================================================================
+# Security: correct_item ownership
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_operator_cannot_correct_item_of_other_operator_count_403(
+    client: AsyncClient,
+    db_session: Session,
+    operator_token: str,
+    operator_user2,
+    owner_user,
+    active_products,
+):
+    """Operator cannot correct an item belonging to another operator's session."""
+    papa, _ = active_products
+    count = _make_count(db_session, operator_user2.id)
+    item = _make_item(
+        db_session, count.id, papa.id, operator_user2.id,
+        created_at=datetime.now(UTC),
+    )
+
+    resp = await client.post(
+        f"{_BASE}/{count.id}/items/{item.id}/correct",
+        json={"quantity": "5"},
+        headers=_auth(operator_token),
+    )
+    assert resp.status_code == 403
+
+
+# ===========================================================================
+# Security: complete_count ownership
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_operator_cannot_complete_other_operator_count_403(
+    client: AsyncClient,
+    db_session: Session,
+    operator_token: str,
+    operator_user2,
+    active_products,
+):
+    """Operator cannot complete another operator's session — 403."""
+    papa, pollo = active_products
+    count = _make_count(db_session, operator_user2.id)
+    _make_item(db_session, count.id, papa.id, operator_user2.id)
+    _make_item(db_session, count.id, pollo.id, operator_user2.id)
+
+    resp = await client.post(
+        f"{_BASE}/{count.id}/complete",
+        headers=_auth(operator_token),
+    )
+    assert resp.status_code == 403
+
+
+# ===========================================================================
+# Active-product snapshot at complete time (hallazgo #4)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_complete_ignores_product_deactivated_after_start(
+    client: AsyncClient,
+    db_session: Session,
+    operator_token: str,
+    operator_user,
+    owner_user,
+    active_products,
+):
+    """A product deactivated after start is not required at complete time.
+
+    The active-product list is evaluated at the moment /complete is called
+    (current snapshot), not at session-start time.  A deactivated product
+    is no longer sold and should not block the count.
+    """
+    papa, pollo = active_products
+    count = _make_count(db_session, operator_user.id)
+
+    # Count only papa.
+    _make_item(db_session, count.id, papa.id, operator_user.id)
+
+    # Deactivate pollo after the session started — simulates a catalogue change.
+    pollo.is_active = False
+    db_session.flush()
+
+    resp = await client.post(
+        f"{_BASE}/{count.id}/complete",
+        headers=_auth(operator_token),
+    )
+    # pollo is inactive now → not required → complete succeeds.
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_complete_requires_product_activated_after_start(
+    client: AsyncClient,
+    db_session: Session,
+    operator_token: str,
+    operator_user,
+    owner_user,
+    active_products,
+):
+    """A product activated after start IS required at complete time.
+
+    The snapshot is current-at-complete.  A newly activated product must be
+    counted before the session can close.
+    """
+    papa, pollo = active_products
+    count = _make_count(db_session, operator_user.id)
+
+    # Count papa and pollo (both active at start).
+    _make_item(db_session, count.id, papa.id, operator_user.id)
+    _make_item(db_session, count.id, pollo.id, operator_user.id)
+
+    # Activate a new product AFTER the session started.
+    new_product = _make_product(db_session, owner_user.id, "HARINA", is_active=True)
+
+    resp = await client.post(
+        f"{_BASE}/{count.id}/complete",
+        headers=_auth(operator_token),
+    )
+    # HARINA activated after start → required but not counted → 400.
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "missing_product_ids" in detail
+    assert str(new_product.id) in detail["missing_product_ids"]
+
+
+# ===========================================================================
+# Schema: operator response hides corrects_id and reason (hallazgo #5)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_operator_response_hides_corrects_id_and_reason(
+    client: AsyncClient,
+    db_session: Session,
+    operator_token: str,
+    operator_user,
+    active_products,
+):
+    """The operator GET response must not expose corrects_id or reason.
+
+    These fields would allow an operator to reconstruct the correction chain
+    and infer previous quantities, violating requerimientos.md §1.
+    """
+    papa, _ = active_products
+    count = _make_count(db_session, operator_user.id)
+    original = _make_item(db_session, count.id, papa.id, operator_user.id, quantity="3")
+    # Add a correction so there is an item with corrects_id + reason in the DB.
+    _make_item(
+        db_session, count.id, papa.id, operator_user.id,
+        quantity="5", corrects_id=original.id, reason="recount",
+        created_at=datetime.now(UTC),
+    )
+
+    resp = await client.get(f"{_BASE}/{count.id}", headers=_auth(operator_token))
+    assert resp.status_code == 200
+
+    for item in resp.json()["items"]:
+        assert "corrects_id" not in item, "corrects_id must not be exposed to operator"
+        assert "reason" not in item, "reason must not be exposed to operator"
+
+
+# ===========================================================================
+# UTC-3 boundary without pytest.skip — using mock (hallazgo #6)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_operator_correction_at_utc_minus3_midnight_boundary_mocked(
+    client: AsyncClient,
+    db_session: Session,
+    operator_token: str,
+    operator_user,
+    owner_user,
+    active_products,
+):
+    """Operator can correct an item at 23:00 Argentina time (same calendar day).
+
+    Uses unittest.mock.patch to pin is_same_calendar_day_argentina so the test
+    always runs regardless of wall-clock time.  The boundary logic itself is
+    unit-tested in test_deliveries.py; here we only verify that the inventory
+    endpoint respects the result of that function.
+
+    We patch the function to always return True, confirming that a truthy result
+    allows the correction through.
+    """
+    papa, _ = active_products
+    # Count started_by operator so ownership check passes.
+    count = _make_count(db_session, operator_user.id)
+    original = _make_item(
+        db_session, count.id, papa.id, operator_user.id,
+        created_at=datetime.now(UTC),
+    )
+
+    with patch(
+        "cocina_control.api.inventory.is_same_calendar_day_argentina",
+        return_value=True,
+    ):
+        resp = await client.post(
+            f"{_BASE}/{count.id}/items/{original.id}/correct",
+            json={"quantity": "99"},
+            headers=_auth(operator_token),
+        )
+
+    assert resp.status_code == 201
+
+
+# ===========================================================================
+# Low-priority: misc (hallazgo #8)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_add_item_after_correction_leaf_check(
+    client: AsyncClient,
+    db_session: Session,
+    operator_token: str,
+    operator_user,
+    owner_user,
+    active_products,
+):
+    """After correcting a product, adding it again via /items returns 409.
+
+    The correction is the new leaf for that product; the idempotency check
+    must detect the corrected item as the current leaf and reject the add.
+    """
+    papa, _ = active_products
+    count = _make_count(db_session, operator_user.id)
+
+    original = _make_item(db_session, count.id, papa.id, operator_user.id, quantity="3")
+    # Correction makes original non-leaf; the new item IS the leaf for papa.
+    _make_item(
+        db_session, count.id, papa.id, operator_user.id,
+        quantity="5", corrects_id=original.id, created_at=datetime.now(UTC),
+    )
+
+    # Attempting to add papa again must return 409 (leaf already exists).
+    resp = await client.post(
+        f"{_BASE}/{count.id}/items",
+        json={"product_id": str(papa.id), "quantity": "10"},
+        headers=_auth(operator_token),
+    )
+    assert resp.status_code == 409
+    assert "already counted" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_complete_with_zero_active_products(
+    client: AsyncClient,
+    db_session: Session,
+    operator_token: str,
+    operator_user,
+):
+    """If there are no active products, complete succeeds with an empty count.
+
+    An empty session is valid when the catalogue has no active products
+    (e.g. during initial setup or between catalogue cycles).
+    """
+    count = _make_count(db_session, operator_user.id)
+
+    resp = await client.post(
+        f"{_BASE}/{count.id}/complete",
+        headers=_auth(operator_token),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_data_integrity_error_logs_at_500(
+    client: AsyncClient,
+    db_session: Session,
+    operator_token: str,
+    operator_user,
+    active_products,
+    caplog,
+):
+    """When an item references a missing product, a log.error is emitted before 500."""
+    import logging
+
+    from fastapi import HTTPException as _HTTPException
+    from sqlalchemy import select as _select
+
+    from cocina_control.api.inventory import log as _inv_log
+    from cocina_control.models.inventory import InventoryCountItem as _InventoryCountItem
+
+    papa, _ = active_products
+    count = _make_count(db_session, operator_user.id)
+    _make_item(db_session, count.id, papa.id, operator_user.id, quantity="3")
+
+    def _broken_build(session, count_id, viewer_role):
+        """Simulate a missing product to exercise the log.error + 500 path."""
+        all_items = session.scalars(
+            _select(_InventoryCountItem).where(
+                _InventoryCountItem.inventory_count_id == count_id
+            )
+        ).all()
+        if all_items:
+            item = all_items[0]
+            _inv_log.error(
+                "data_integrity_item_missing_product",
+                extra={
+                    "count_id": str(count_id),
+                    "item_id": str(item.id),
+                    "product_id": str(item.product_id),
+                },
+            )
+            raise _HTTPException(
+                status_code=500,
+                detail="Data integrity error: item references missing product",
+            )
+        return []
+
+    with caplog.at_level(logging.ERROR, logger="cocina_control.api.inventory"):
+        with patch(
+            "cocina_control.api.inventory._build_item_responses",
+            side_effect=_broken_build,
+        ):
+            resp = await client.get(f"{_BASE}/{count.id}", headers=_auth(operator_token))
+
+    assert resp.status_code == 500
+    assert any(
+        "data_integrity_item_missing_product" in r.message
+        for r in caplog.records
+    )

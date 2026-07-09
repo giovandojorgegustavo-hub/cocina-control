@@ -48,11 +48,32 @@ class InventoryItemCorrect(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class InventoryItemResponse(BaseModel):
-    """Single item in an inventory count session.
+class InventoryItemResponseOperator(BaseModel):
+    """Single item in an inventory count session — operator view.
 
     Intentionally excludes:
     - expected_qty / any comparison field (operator counts blind — requerimientos.md §1)
+    - created_by (traceability stays in the DB)
+    - corrects_id (correction chain is internal; revealing it lets operators
+      infer previous values and reconstruct deltas — requerimientos.md §1)
+    - reason (correction rationale is owner-only information)
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    product_id: uuid.UUID
+    product_name: str
+    quantity: Decimal
+
+
+class InventoryItemResponseOwner(BaseModel):
+    """Single item in an inventory count session — owner view.
+
+    Owner sees the full correction chain (corrects_id + reason) for audit.
+    Intentionally excludes:
+    - expected_qty / any comparison field (requerimientos.md §1 — blind count
+      invariant is not broken here because owner already sees all reports)
     - created_by (traceability stays in the DB)
     """
 
@@ -72,9 +93,9 @@ class InventoryCountResponse(BaseModel):
     started_by / completed_by are excluded — the operator does not need to
     see who started the session, and the owner has audit access via the DB.
 
-    items contains ALL items (original + corrections) to let the client
-    build the full chain if needed.  The GET handler filters to leaf-only
-    items per the spec; the POST (start) handler returns an empty list.
+    items contains leaf items only — corrected items are excluded from the
+    response.  A leaf item is the most-recent count for a given product
+    (original or latest correction).  The GET handler filters before returning.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -83,7 +104,7 @@ class InventoryCountResponse(BaseModel):
     status: Literal["in_progress", "completed"]
     started_at: datetime
     completed_at: datetime | None = None
-    items: list[InventoryItemResponse]
+    items: list[InventoryItemResponseOwner | InventoryItemResponseOperator]
 
 
 class InventoryCountStartResponse(BaseModel):
