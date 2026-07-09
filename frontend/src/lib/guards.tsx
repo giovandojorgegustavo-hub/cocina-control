@@ -1,14 +1,22 @@
+import { useEffect, type ReactElement } from 'react'
 import { Navigate } from 'react-router-dom'
 import { useAuth } from './auth'
 import { useAuthWithGetters } from './auth'
+import { decodeToken } from './auth'
 import type { UserRole } from './auth'
 
-export function RequireAuth({ children }: { children: React.ReactNode }) {
+export function RequireAuth({ children }: { children: ReactElement }) {
   const token = useAuth((s) => s.token)
-  if (!token) {
-    return <Navigate to="/login" replace />
-  }
-  return <>{children}</>
+  const clearToken = useAuth((s) => s.clearToken)
+
+  const isValid = token ? decodeToken(token) !== null : false
+
+  useEffect(() => {
+    if (token && !isValid) clearToken()
+  }, [token, isValid, clearToken])
+
+  if (!isValid) return <Navigate to="/login" replace />
+  return children
 }
 
 // Redirects away if the authenticated user does not have the required role.

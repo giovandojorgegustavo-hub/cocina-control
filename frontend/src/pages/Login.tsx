@@ -1,10 +1,10 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthWithGetters } from '../lib/auth'
 import { apiClient } from '../lib/api'
 import type { UserRole } from '../lib/auth'
 
-type ErrorKind = 'credentials' | 'rate_limit' | 'network' | 'offline' | null
+type ErrorKind = 'credentials' | 'rate_limit' | 'network' | 'offline' | 'other' | null
 
 interface LoginResponse {
   token: string
@@ -14,13 +14,14 @@ interface LoginResponse {
 
 export function Login() {
   const navigate = useNavigate()
-  const { setToken, role } = useAuthWithGetters()
+  const { setToken, clearToken, role } = useAuthWithGetters()
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<ErrorKind>(null)
   const [isOffline, setIsOffline] = useState(!navigator.onLine)
+  const submitting = useRef(false)
 
   // Redirect if already authenticated
   useEffect(() => {
@@ -41,25 +42,32 @@ export function Login() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
+    if (submitting.current) return
     if (isOffline) {
       setError('offline')
       return
     }
 
+    submitting.current = true
     setLoading(true)
     setError(null)
 
+    const normalizedEmail = email.trim().toLowerCase()
+
     try {
       const { data } = await apiClient.post<LoginResponse>('/auth/login', {
-        email,
+        email: normalizedEmail,
         password,
       })
-      setToken(data.token)
-      if (data.role === 'operator') {
-        navigate('/', { replace: true })
-      } else {
-        navigate('/tablero', { replace: true })
+
+      if (data.role !== 'operator' && data.role !== 'owner') {
+        clearToken()
+        setError('other')
+        return
       }
+
+      setToken(data.token)
+      navigate(data.role === 'operator' ? '/' : '/tablero', { replace: true })
     } catch (err: unknown) {
       if (!navigator.onLine) {
         setError('offline')
@@ -74,6 +82,7 @@ export function Login() {
         setError('network')
       }
     } finally {
+      submitting.current = false
       setLoading(false)
     }
   }
@@ -83,6 +92,7 @@ export function Login() {
     rate_limit: 'Demasiados intentos, esperá un minuto',
     network: 'No se pudo entrar, probá de nuevo',
     offline: 'Sin conexión',
+    other: 'No se pudo entrar, probá de nuevo',
   }
 
   const isDisabled = loading || isOffline
@@ -113,7 +123,7 @@ export function Login() {
               autoFocus
               required
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) => { setEmail(e.target.value); if (error) setError(null) }}
               disabled={isDisabled}
               placeholder="operario@cocina.com"
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900 disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed"
@@ -133,7 +143,7 @@ export function Login() {
               autoComplete="current-password"
               required
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(e) => { setPassword(e.target.value); if (error) setError(null) }}
               disabled={isDisabled}
               placeholder="••••••••"
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900 disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed"
