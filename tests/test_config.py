@@ -99,3 +99,36 @@ def test_business_timezone_invalid_rejected() -> None:
             jwt_secret=_VALID_SECRET,
             business_timezone="Not/ATimezone",
         )
+
+
+def test_business_timezone_empty_string_rejected() -> None:
+    """An empty string is not a valid timezone (ZoneInfo raises ValueError)."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="valid IANA timezone name"):
+        Settings(
+            database_url=_DUMMY_DB_URL,
+            jwt_secret=_VALID_SECRET,
+            business_timezone="",
+        )
+
+
+def test_business_timezone_slash_only_rejected() -> None:
+    """A slash-only value must be rejected (ZoneInfo raises ValueError, not KeyError)."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="valid IANA timezone name"):
+        Settings(
+            database_url=_DUMMY_DB_URL,
+            jwt_secret=_VALID_SECRET,
+            business_timezone="/",
+        )
+
+
+def test_business_timezone_override_via_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """business_timezone can be set end-to-end via COCINA_BUSINESS_TIMEZONE."""
+    monkeypatch.setenv("COCINA_DATABASE_URL", _DUMMY_DB_URL)
+    monkeypatch.setenv("COCINA_JWT_SECRET", _VALID_SECRET)
+    monkeypatch.setenv("COCINA_BUSINESS_TIMEZONE", "America/Buenos_Aires")
+    s = Settings()
+    assert s.business_timezone == "America/Buenos_Aires"

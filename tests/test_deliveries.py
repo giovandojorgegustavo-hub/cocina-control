@@ -1373,11 +1373,11 @@ async def test_operator_correct_next_day_returns_403(
 ) -> None:
     """Operator cannot correct an item when the delivery was validated on a previous day.
 
-    The correction window is anchored to delivery.validated_at (UTC-3), not to
-    item.created_at.
+    The correction window is anchored to delivery.validated_at (business timezone,
+    default America/Lima), not to item.created_at.
     """
     p1, *_ = active_products
-    # Validated 48 hours ago → previous calendar day in UTC-3.
+    # Validated 48 hours ago → previous calendar day in the business timezone.
     yesterday = datetime.now(UTC) - timedelta(hours=48)
     delivery, item = _make_validated_delivery_with_item(
         db_session, owner_user.id, p1, item_created_at=yesterday, validated_at=yesterday

@@ -582,6 +582,8 @@ Opcionalmente, un `Makefile` con un target `deploy` encapsula estos pasos para e
 
 **Zona horaria del negocio.** Todos los timestamps se guardan en UTC en la base de datos (`TIMESTAMPTZ`). La zona horaria del negocio — `America/Lima` (UTC-5, sin DST) — se usa únicamente para interpretar fechas calendario: cortes de día en ventanas de corrección, fecha "de hoy" del tablero, y conversión de los parámetros `from/to` a rango UTC. Se configura vía `COCINA_BUSINESS_TIMEZONE` (default `America/Lima`). Cambiar la zona horaria para una relocalización o segunda cocina requiere solo ajustar la env var — sin migración ni cambio de código. El frontend recibe los timestamps en UTC y es responsable de formatearlos en hora local para el usuario.
 
+**Efecto retroactivo al cambiar la zona horaria.** Los eventos históricos siguen guardados en UTC; el cambio de `COCINA_BUSINESS_TIMEZONE` no los mueve. Sí cambia la fecha calendario a la que quedan asignados a partir de ese momento: un pedido validado entre 22:00 y 24:00 Lima (03:00–05:00 UTC del día siguiente) se contabilizaba como "el día X" cuando la config era Lima; si se cambia a Buenos Aires (UTC-3), pasa a contabilizarse como "el día X+1" para los reportes que consulten después del cambio. En la práctica esto es un no-issue mientras el negocio no se mude físicamente. Al mudarse, conviene documentar la fecha del corte para poder interpretar reportes retroactivos.
+
 ### Decisiones diferidas
 
 - **Periodicidad del inventario y mecanismo de aviso al operario** — depende de confirmación del dueño (mencionado en `requerimientos.md` como asunción pendiente).

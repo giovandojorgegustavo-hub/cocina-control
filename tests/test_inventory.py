@@ -455,11 +455,11 @@ async def test_operator_correct_next_day_returns_403(
     owner_user,
     active_products,
 ):
-    """Operator cannot correct an item from the previous calendar day (UTC-3)."""
+    """Operator cannot correct an item from the previous calendar day (business timezone)."""
     papa, _ = active_products
     # Count must be started_by operator so ownership passes; window check fails after.
     count = _make_count(db_session, operator_user.id)
-    # Simulate an item created yesterday in Argentina time.
+    # Simulate an item created yesterday in the business timezone (default America/Lima).
     yesterday_utc = datetime.now(UTC) - timedelta(days=1)
     original = _make_item(
         db_session, count.id, papa.id, operator_user.id,

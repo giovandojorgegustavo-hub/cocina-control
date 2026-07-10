@@ -33,7 +33,8 @@ def is_same_calendar_day_local(a: datetime, b: datetime) -> bool:
       d2 = datetime(2026, 7, 10, 0, 0, tzinfo=ZoneInfo("America/Lima"))   # 00:00 Lima July 10
       is_same_calendar_day_local(d1, d2)  # → False
 
-      d3 = datetime(2026, 7, 10, 4, 0, tzinfo=timezone.utc)  # 23:00 Lima July 9
+      from datetime import UTC
+      d3 = datetime(2026, 7, 10, 4, 0, tzinfo=UTC)  # 23:00 Lima July 9
       is_same_calendar_day_local(d1, d3)  # → True
     """
     tz = ZoneInfo(get_settings().business_timezone)

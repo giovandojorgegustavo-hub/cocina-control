@@ -40,7 +40,8 @@ class Settings(BaseSettings):
     def _business_timezone_valid(cls, v: str) -> str:
         try:
             ZoneInfo(v)
-        except (ZoneInfoNotFoundError, KeyError):
+        except (ZoneInfoNotFoundError, KeyError, ValueError):
+            # ValueError covers "" and "/" and other malformed paths.
             raise ValueError(
                 f"business_timezone must be a valid IANA timezone name, e.g. America/Lima. "
                 f"Got: {v!r}"
