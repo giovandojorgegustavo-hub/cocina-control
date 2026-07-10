@@ -65,6 +65,14 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Cache npm and node_modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            frontend/node_modules
+          key: frontend-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
+
       - name: Frontend dependencies
         working-directory: frontend
         run: npm ci
@@ -147,23 +155,37 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
 
-      - name: Trust the production host key
-        # ssh-keyscan records the current host key. In a hardened setup a static
-        # PROD_SSH_HOST_KEY secret would be pinned instead. Using keyscan here
-        # is a pragmatic default; upgrade to a pinned key when the ops team
-        # provides it (issue in docs/despliegue.md).
+      - name: Trust the production host key (pinned via secret)
+        # We pin the server's host key via the PROD_SSH_HOST_KEY secret
+        # (obtained ONCE from the trusted server with `ssh-keyscan -H host`
+        # and stored in the produccion environment). Any change of the
+        # server's key breaks the deploy intentionally — that is the point.
         env:
-          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_HOST_KEY: ${{ secrets.PROD_SSH_HOST_KEY }}
         run: |
+          set -euo pipefail
+          if [ -z "${SSH_HOST_KEY:-}" ]; then
+            echo "FAILED: PROD_SSH_HOST_KEY secret is not set." >&2
+            echo "Populate it in the 'produccion' environment with the output of" >&2
+            echo "  ssh-keyscan -H <PROD_SSH_HOST>" >&2
+            echo "run once from a trusted network. See docs/despliegue.md (issue #90)." >&2
+            exit 1
+          fi
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          ssh-keyscan -H "${SSH_HOST}" >> ~/.ssh/known_hosts
+          echo "${SSH_HOST_KEY}" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
 
       # -------------------------------------------------------------------
       # 3a. pg_dump BEFORE touching code or running migrations.
       #     If this fails, we abort the whole release. No half-migrations.
       # -------------------------------------------------------------------
       - name: Backup PostgreSQL (pg_dump)
+        # SECURITY: TAG and DEPLOY_PATH are passed as positional args
+        # (`bash -s -- "$TAG" "$DEPLOY_PATH"`), not interpolated into a shell
+        # string. This prevents command injection if a maliciously named tag
+        # is pushed (git allows single quotes in tag names, which would break
+        # the previous `"TAG='...' bash -s"` form).
         env:
           SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
           SSH_USER: ${{ secrets.PROD_SSH_USER }}
@@ -171,9 +193,10 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          ssh "${SSH_USER}@${SSH_HOST}" \
-            "TAG='${TAG}' DEPLOY_PATH='${DEPLOY_PATH}' bash -s" <<'REMOTE'
+          ssh "${SSH_USER}@${SSH_HOST}" bash -s -- "${TAG}" "${DEPLOY_PATH}" <<'REMOTE'
           set -euo pipefail
+          TAG="$1"
+          DEPLOY_PATH="$2"
           set -a; source /etc/cocina-control/env; set +a
           mkdir -p "${DEPLOY_PATH}/backups"
           TS=$(date -u +%Y%m%dT%H%M%SZ)
@@ -227,6 +250,8 @@ jobs:
       #     restart the systemd unit.
       # -------------------------------------------------------------------
       - name: Install deps, migrate, restart
+        # Same injection-safe pattern as the backup step: positional args, no
+        # interpolation into a shell string on the runner.
         env:
           SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
           SSH_USER: ${{ secrets.PROD_SSH_USER }}
@@ -234,9 +259,10 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          ssh "${SSH_USER}@${SSH_HOST}" \
-            "TAG='${TAG}' DEPLOY_PATH='${DEPLOY_PATH}' bash -s" <<'REMOTE'
+          ssh "${SSH_USER}@${SSH_HOST}" bash -s -- "${TAG}" "${DEPLOY_PATH}" <<'REMOTE'
           set -euo pipefail
+          TAG="$1"
+          DEPLOY_PATH="$2"
           cd "${DEPLOY_PATH}"
           echo "--- Installing frozen deps ---"
           uv sync --frozen
@@ -249,14 +275,17 @@ jobs:
           REMOTE
 
       - name: Verify /health responds
+        # Same injection-safe pattern. BACKEND_PORT is a workflow-level env var
+        # (hardcoded); the ':?' assertion catches an accidental future removal.
         env:
           SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
           SSH_USER: ${{ secrets.PROD_SSH_USER }}
         run: |
           set -euo pipefail
-          ssh "${SSH_USER}@${SSH_HOST}" \
-            "BACKEND_PORT='${BACKEND_PORT}' bash -s" <<'REMOTE'
+          : "${BACKEND_PORT:?BACKEND_PORT must be defined in workflow env}"
+          ssh "${SSH_USER}@${SSH_HOST}" bash -s -- "${BACKEND_PORT}" <<'REMOTE'
           set -euo pipefail
+          BACKEND_PORT="$1"
           echo "Polling http://127.0.0.1:${BACKEND_PORT}/health for up to 30s..."
           for i in $(seq 1 15); do
             if curl -sf "http://127.0.0.1:${BACKEND_PORT}/health" > /dev/null; then
@@ -278,3 +307,31 @@ jobs:
         run: |
           echo "Release ${TAG} deployed to https://bonabowl.com/interno/"
           echo "Backup lives in ${DEPLOY_PATH}/backups/pre-${TAG}-*.sql.gz"
+
+      - name: Report failure with server state
+        # Runs only if any previous deploy step failed. Prints the systemd unit
+        # status and points at the backup so an operator can rollback quickly
+        # (procedure documented in docs/despliegue.md, issue #90).
+        if: failure()
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          DEPLOY_PATH: ${{ secrets.PROD_DEPLOY_PATH }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set +e
+          echo "==============================================================="
+          echo "DEPLOY FAILED for tag ${TAG}"
+          echo "==============================================================="
+          echo "Server may be in an inconsistent state (code updated but service"
+          echo "not started, or migrations applied against previous code)."
+          echo ""
+          echo "Rolling back: see docs/despliegue.md (issue #90). The pg_dump"
+          echo "taken before the migration lives at:"
+          echo "  ${DEPLOY_PATH}/backups/pre-${TAG}-*.sql.gz"
+          echo ""
+          echo "--- Attempting to fetch systemd status of cocina-control ---"
+          ssh -o StrictHostKeyChecking=no "${SSH_USER}@${SSH_HOST}" \
+            "sudo /bin/systemctl status cocina-control.service --no-pager" || \
+            echo "(could not reach the server via SSH)"
+          exit 1
