@@ -20,7 +20,9 @@ import { ErrorBanner } from '../components/ErrorBanner'
 import { formatRelativeDate } from '../lib/date'
 import type { Product } from '../lib/types'
 
-const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+// Same convention as src/lib/api.ts: empty means same-origin (relative path).
+// In dev the Vite proxy routes /api to the backend; in prod Caddy does the same.
+const BASE_URL = import.meta.env.VITE_API_URL ?? ''
 
 // ---------------------------------------------------------------------------
 // Types
