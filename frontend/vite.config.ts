@@ -4,9 +4,23 @@ import { VitePWA } from 'vite-plugin-pwa'
 
 // Base path for the app. Default is '/' (dev and root builds).
 // In production, build with: VITE_BASE_PATH=/interno/ npm run build
-// The value MUST end with '/'; if the env var omits it, we add it defensively.
+//
+// The value MUST start with '/'; the trailing '/' is added defensively.
+// A missing leading slash is a common typo and Vite only warns — we reject
+// it up front so misconfiguration surfaces as an error at build time.
+//
+// Note: in dev, the /api proxy is registered as literal '/api'. Setting
+// VITE_BASE_PATH to a non-root value in dev breaks API calls (they resolve
+// to e.g. /interno/api/... which the proxy doesn't match). Only set the
+// var in production builds; keep dev on '/'.
 const rawBase = process.env.VITE_BASE_PATH ?? '/'
-const basePath = rawBase.endsWith('/') ? rawBase : `${rawBase}/`
+if (rawBase !== '' && !rawBase.startsWith('/')) {
+  throw new Error(
+    `VITE_BASE_PATH must start with '/'. Got: ${JSON.stringify(rawBase)}. ` +
+      `Example: /interno/`,
+  )
+}
+const basePath = rawBase === '' || rawBase.endsWith('/') ? rawBase || '/' : `${rawBase}/`
 
 export default defineConfig({
   // Dev + preview proxy: same-origin requests to /api are forwarded to the FastAPI
