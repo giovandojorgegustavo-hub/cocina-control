@@ -83,7 +83,12 @@ const MOCK_SUMMARY_FULL = {
     completed_count: 38,
     photo_only_count: 5,
   },
-  last_inventory_at: '2026-07-08T02:15:00Z',
+  // Kept null to avoid date-based coincidences: a fixed ISO date would
+  // periodically collide with today-6d (the '7d' preset default) and break
+  // any test that expects a click on a preset to trigger a refetch by
+  // producing a different queryKey. Tests that need a specific
+  // last_inventory_at override it with { ...MOCK_SUMMARY_FULL, last_inventory_at: X }.
+  last_inventory_at: null,
 }
 
 const MOCK_SUMMARY_EMPTY = {
@@ -474,13 +479,15 @@ test('test_hoy_uses_last_inventory_at_when_available', async ({ page }) => {
 
   const requestedUrls: string[] = []
 
-  // Anchor last_inventory_at to yesterday at noon UTC. Rationale:
+  // Anchor last_inventory_at at "24h ago noon UTC". Rationale:
   //   - Default preset is '7d' → from = today - 6 days.
-  //   - 'today' preset with last_inventory_at yesterday → from = yesterday in UTC-3.
-  //   - These two `from` values are guaranteed to differ, so the click on HOY
-  //     changes the queryKey and triggers a refetch. If we used a fixed date
-  //     like 2026-07-05 the test breaks by coincidence whenever `today` happens
-  //     to be exactly 6 days after that date (both presets produce the same from).
+  //   - 'today' preset with last_inventory_at 24h ago → from is either today
+  //     or yesterday in UTC-3 depending on wall-clock hour, but always strictly
+  //     within the last 2 days, i.e. much closer than today - 6d.
+  //   - The two `from` values are guaranteed to differ, so the click on HOY
+  //     changes the queryKey and triggers a refetch. Using a fixed ISO date
+  //     would break by coincidence whenever `today` lands exactly 6 days after
+  //     it (both presets end up producing the same from).
   const nowMs = Date.now()
   const yesterdayNoonUtc = new Date(nowMs - 24 * 60 * 60 * 1000)
   yesterdayNoonUtc.setUTCHours(12, 0, 0, 0)
