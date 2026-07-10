@@ -204,7 +204,12 @@ jobs:
           echo "Dumping to ${OUT}"
           # Strip the driver prefix so pg_dump gets a plain libpq URL.
           DBURL="${COCINA_DATABASE_URL#postgresql+psycopg://}"
-          pg_dump --dbname="postgresql://${DBURL}" | gzip > "${OUT}"
+          # --clean --if-exists is CRITICAL: it makes the dump replayable
+          # against a database that already has the new schema (which is
+          # exactly the state after a failed post-migration deploy — the
+          # scenario when rollback matters most). Without these flags the
+          # restore aborts with 'relation already exists'.
+          pg_dump --clean --if-exists --dbname="postgresql://${DBURL}" | gzip > "${OUT}"
           ls -lh "${OUT}"
           REMOTE
 
@@ -331,7 +336,10 @@ jobs:
           echo "  ${DEPLOY_PATH}/backups/pre-${TAG}-*.sql.gz"
           echo ""
           echo "--- Attempting to fetch systemd status of cocina-control ---"
-          ssh -o StrictHostKeyChecking=no "${SSH_USER}@${SSH_HOST}" \
+          # Reuse the pinned known_hosts written earlier in this job. Do NOT
+          # relax StrictHostKeyChecking here: a failed deploy is exactly when
+          # host identity matters most.
+          ssh "${SSH_USER}@${SSH_HOST}" \
             "sudo /bin/systemctl status cocina-control.service --no-pager" || \
             echo "(could not reach the server via SSH)"
           exit 1
