@@ -83,7 +83,12 @@ const MOCK_SUMMARY_FULL = {
     completed_count: 38,
     photo_only_count: 5,
   },
-  last_inventory_at: '2026-07-08T02:15:00Z',
+  // Kept null to avoid date-based coincidences: a fixed ISO date would
+  // periodically collide with today-6d (the '7d' preset default) and break
+  // any test that expects a click on a preset to trigger a refetch by
+  // producing a different queryKey. Tests that need a specific
+  // last_inventory_at override it with { ...MOCK_SUMMARY_FULL, last_inventory_at: X }.
+  last_inventory_at: null,
 }
 
 const MOCK_SUMMARY_EMPTY = {
@@ -474,13 +479,32 @@ test('test_hoy_uses_last_inventory_at_when_available', async ({ page }) => {
 
   const requestedUrls: string[] = []
 
+  // Anchor last_inventory_at at "24h ago noon UTC". Rationale:
+  //   - Default preset is '7d' → from = today - 6 days.
+  //   - 'today' preset with last_inventory_at 24h ago → from is either today
+  //     or yesterday in UTC-3 depending on wall-clock hour, but always strictly
+  //     within the last 2 days, i.e. much closer than today - 6d.
+  //   - The two `from` values are guaranteed to differ, so the click on HOY
+  //     changes the queryKey and triggers a refetch. Using a fixed ISO date
+  //     would break by coincidence whenever `today` lands exactly 6 days after
+  //     it (both presets end up producing the same from).
+  const nowMs = Date.now()
+  const yesterdayNoonUtc = new Date(nowMs - 24 * 60 * 60 * 1000)
+  yesterdayNoonUtc.setUTCHours(12, 0, 0, 0)
+  const lastInventoryAtIso = yesterdayNoonUtc.toISOString()
+  // Compute expected `from` in UTC-3 (Tablero uses UTC-3 in usePeriod.ts).
+  const yesterdayLocal = new Date(yesterdayNoonUtc.getTime() - 3 * 60 * 60 * 1000)
+  const y = yesterdayLocal.getUTCFullYear()
+  const m = String(yesterdayLocal.getUTCMonth() + 1).padStart(2, '0')
+  const d = String(yesterdayLocal.getUTCDate()).padStart(2, '0')
+  const expectedFrom = `${y}-${m}-${d}`
+
   await page.route(SUMMARY_URL, (route) => {
     requestedUrls.push(route.request().url())
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      // last_inventory_at is 2026-07-05 UTC (= 2026-07-04 in UTC-3 at 21:00)
-      body: JSON.stringify({ ...MOCK_SUMMARY_FULL, last_inventory_at: '2026-07-05T00:00:00Z' }),
+      body: JSON.stringify({ ...MOCK_SUMMARY_FULL, last_inventory_at: lastInventoryAtIso }),
     })
   })
 
@@ -499,12 +523,11 @@ test('test_hoy_uses_last_inventory_at_when_available', async ({ page }) => {
     expect(requestedUrls.length).toBeGreaterThan(countBefore)
   }).toPass()
 
-  // The HOY request must use the last_inventory_at date as `from`, NOT today.
+  // The HOY request must use last_inventory_at as `from`, NOT today.
   const latestUrl = requestedUrls[requestedUrls.length - 1]
   const urlObj = new URL(latestUrl)
   const fromParam = urlObj.searchParams.get('from')
-  // last_inventory_at '2026-07-05T00:00:00Z' in UTC-3 is '2026-07-04'
-  expect(fromParam).toBe('2026-07-04')
+  expect(fromParam).toBe(expectedFrom)
 })
 
 // ---------------------------------------------------------------------------
