@@ -611,3 +611,102 @@ test('test_summary_query_scoped_by_user_id', async ({ page }) => {
   // A second request must have been issued — data was not served from user-a's cache
   expect(requestedUrls.length).toBeGreaterThan(urlsAfterUserA)
 })
+
+// ---------------------------------------------------------------------------
+// test_tablero_logout_clears_token_and_prevents_reentry (issue #85)
+//
+// Enjaula el bug: "cerrar sesion" del tablero debe limpiar el token del
+// sessionStorage.  Sin el fix, navegar de vuelta a /tablero tras el logout
+// deja al usuario re-autenticado porque el guard RequireAuth encuentra el
+// token todavía en sessionStorage.
+// ---------------------------------------------------------------------------
+
+test('test_tablero_logout_clears_token_and_prevents_reentry', async ({ page }) => {
+  await injectToken(page, 'owner')
+
+  await page.route(SUMMARY_URL, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(MOCK_SUMMARY_FULL),
+    })
+  })
+
+  await page.route('**/api/v1/auth/logout', (route) => {
+    route.fulfill({ status: 204, body: '' })
+  })
+
+  await page.goto('/tablero')
+  await expect(page.getByRole('region', { name: /pedidos en el periodo/i })).toBeVisible()
+
+  // Sanity: token is in sessionStorage before logout.
+  const tokenBefore = await page.evaluate(() => sessionStorage.getItem('cocina-auth'))
+  expect(tokenBefore).not.toBeNull()
+
+  // Click "cerrar sesion" — the button in the tablero header.
+  await page.getByRole('button', { name: /cerrar sesion/i }).click()
+
+  // After the click, the app redirects to /login.
+  await expect(page).toHaveURL(/\/login/)
+
+  // The token in sessionStorage MUST be cleared. Zustand persist keeps the
+  // key with token: null after clearToken(); if the whole key is removed it
+  // is also acceptable. Both paths are asserted.
+  const tokenAfter = await page.evaluate(() => sessionStorage.getItem('cocina-auth'))
+  if (tokenAfter === null) {
+    expect(tokenAfter).toBeNull()
+  } else {
+    const parsed = JSON.parse(tokenAfter)
+    expect(parsed?.state?.token).toBeFalsy()
+  }
+
+  // Navigating back to /tablero must not re-enter the dashboard — the guard
+  // has to redirect to /login again.
+  await page.goto('/tablero')
+  await expect(page).toHaveURL(/\/login/)
+})
+
+// ---------------------------------------------------------------------------
+// test_tablero_logout_clears_token_even_if_server_fails (H-2 from review)
+//
+// The guarantee is that the local token is cleared no matter what the server
+// does. Enjaula el path donde POST /auth/logout falla (network, 5xx, offline).
+// ---------------------------------------------------------------------------
+
+test('test_tablero_logout_clears_token_even_if_server_fails', async ({ page }) => {
+  await injectToken(page, 'owner')
+
+  await page.route(SUMMARY_URL, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(MOCK_SUMMARY_FULL),
+    })
+  })
+
+  // Server-side logout aborts as if the network were down.
+  await page.route('**/api/v1/auth/logout', (route) => {
+    route.abort('failed')
+  })
+
+  await page.goto('/tablero')
+  await expect(page.getByRole('region', { name: /pedidos en el periodo/i })).toBeVisible()
+
+  await page.getByRole('button', { name: /cerrar sesion/i }).click()
+
+  // Even with the server logout failing, the local token must be cleared and
+  // the user redirected to /login.
+  await expect(page).toHaveURL(/\/login/)
+
+  const tokenAfter = await page.evaluate(() => sessionStorage.getItem('cocina-auth'))
+  if (tokenAfter === null) {
+    expect(tokenAfter).toBeNull()
+  } else {
+    const parsed = JSON.parse(tokenAfter)
+    expect(parsed?.state?.token).toBeFalsy()
+  }
+
+  // Renavigation still bounces to login.
+  await page.goto('/tablero')
+  await expect(page).toHaveURL(/\/login/)
+})
