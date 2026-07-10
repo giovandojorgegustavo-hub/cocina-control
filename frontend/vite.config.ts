@@ -3,6 +3,34 @@ import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
+  // Dev + preview proxy: same-origin requests to /api are forwarded to the FastAPI
+  // backend. This mirrors the production topology where Caddy proxies /api to the
+  // backend on the same origin, so the frontend never needs CORS. Backend URL is
+  // configurable via VITE_DEV_PROXY_TARGET (default: http://127.0.0.1:8000).
+  //
+  // The same proxy config is applied to `preview` so that:
+  //   - Playwright (which runs against `vite preview`) does not serve the SPA
+  //     index.html as a fallback for /api requests. Tests that don't mock a
+  //     specific endpoint get a real network error, matching the old behavior
+  //     (before /api was same-origin).
+  //   - Manual smoke tests against `vite preview` still hit a real backend if
+  //     it is running.
+  server: {
+    proxy: {
+      '/api': {
+        target: process.env.VITE_DEV_PROXY_TARGET ?? 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
+    },
+  },
+  preview: {
+    proxy: {
+      '/api': {
+        target: process.env.VITE_DEV_PROXY_TARGET ?? 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
+    },
+  },
   plugins: [
     react(),
     VitePWA({

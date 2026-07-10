@@ -1,7 +1,10 @@
 import axios from 'axios'
 import { useAuth } from './auth'
 
-const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+// In dev, VITE_API_URL is empty and requests go to /api/v1/... — Vite proxies them
+// to the backend (see vite.config.ts). In production, VITE_API_URL is the absolute
+// URL of the backend baked into the build (same origin behind Caddy is also OK).
+const BASE_URL = import.meta.env.VITE_API_URL ?? ''
 
 export const apiClient = axios.create({
   baseURL: `${BASE_URL}/api/v1`,
