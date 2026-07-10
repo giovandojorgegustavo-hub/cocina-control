@@ -440,9 +440,11 @@ export function Tablero() {
     try {
       await apiClient.post('/auth/logout')
     } catch {
-      // best-effort
+      // best-effort — ignore errors, always clear locally
     }
+    // Clear query cache before token so next user never sees stale data.
     queryClient.clear()
+    clearToken()
     navigate('/login', { replace: true })
   }
 
