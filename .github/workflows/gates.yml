@@ -97,3 +97,7 @@ jobs:
       - name: Run Playwright tests
         working-directory: frontend
         run: npx playwright test
+
+      - name: Verify build with /interno/ base path
+        working-directory: frontend
+        run: npm run verify:base-build

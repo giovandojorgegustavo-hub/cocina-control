@@ -20,9 +20,9 @@ import { ErrorBanner } from '../components/ErrorBanner'
 import { formatRelativeDate } from '../lib/date'
 import type { Product } from '../lib/types'
 
-// Same convention as src/lib/api.ts: empty means same-origin (relative path).
-// In dev the Vite proxy routes /api to the backend; in prod Caddy does the same.
-const BASE_URL = import.meta.env.VITE_API_URL ?? ''
+// Same convention as src/lib/api.ts: VITE_API_URL wins if set; otherwise derive
+// from BASE_URL so photo requests go to /interno/api/v1/... in production.
+const BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.BASE_URL.replace(/\/$/, '')
 
 // ---------------------------------------------------------------------------
 // Types

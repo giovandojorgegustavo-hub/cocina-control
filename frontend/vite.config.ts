@@ -2,6 +2,12 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
+// Base path for the app. Default is '/' (dev and root builds).
+// In production, build with: VITE_BASE_PATH=/interno/ npm run build
+// The value MUST end with '/'; if the env var omits it, we add it defensively.
+const rawBase = process.env.VITE_BASE_PATH ?? '/'
+const basePath = rawBase.endsWith('/') ? rawBase : `${rawBase}/`
+
 export default defineConfig({
   // Dev + preview proxy: same-origin requests to /api are forwarded to the FastAPI
   // backend. This mirrors the production topology where Caddy proxies /api to the
@@ -15,6 +21,7 @@ export default defineConfig({
   //     (before /api was same-origin).
   //   - Manual smoke tests against `vite preview` still hit a real backend if
   //     it is running.
+  base: basePath,
   server: {
     proxy: {
       '/api': {
@@ -45,7 +52,8 @@ export default defineConfig({
         background_color: '#ffffff',
         display: 'standalone',
         orientation: 'any',
-        start_url: '/',
+        start_url: basePath,
+        scope: basePath,
         icons: [
           {
             src: 'icons/icon-192.png',
