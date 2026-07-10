@@ -14,7 +14,7 @@ En el server de bonabowl corre **Caddy** que termina TLS y enruta:
 |---|---|
 | `/` | El sitio principal de bonabowl (existente, fuera de este repo). |
 | `/interno/api/*` | Reverse proxy a `http://127.0.0.1:8001` — el uvicorn del backend de cocina-control. |
-| `/interno/*` (resto) | Archivos estáticos del bundle del frontend en `${DEPLOY_PATH}/frontend-dist/`. |
+| `/interno/*` (resto) | Archivos estáticos del bundle del frontend en `/opt/cocina-control/frontend-dist/` (valor `PROD_DEPLOY_PATH` sugerido; si cambiás la ruta, actualizá el Caddyfile también). |
 
 Todo lo demás vive en el mismo server:
 
@@ -67,20 +67,29 @@ uv sync --frozen
 sudo systemctl stop cocina-control.service
 
 # 3. Restaurar el pg_dump que se hizo ANTES de migrar el tag fallido:
-#    Este dump refleja el schema y los datos ANTERIORES a las migraciones nuevas.
+#    El dump se toma con `--clean --if-exists`, así que el restore borra las
+#    tablas actuales y las recrea. Esto funciona incluso si el deploy fallido
+#    ya había corrido `alembic upgrade head` — el dump sabe cómo pisar el schema.
 set -a; source /etc/cocina-control/env; set +a
 DBURL="${COCINA_DATABASE_URL#postgresql+psycopg://}"
 gunzip -c backups/pre-v0.1.0-*.sql.gz | psql "postgresql://${DBURL}"
 
-# 4. Reiniciar:
+# 4. IMPORTANTE: limpiar los secrets del entorno de la sesión antes de seguir.
+#    `set -a; source ...` los exportó al shell; si se dejan vivos quedan
+#    accesibles a cualquier subproceso durante toda la sesión SSH (y en
+#    tmux/screen persisten hasta que se cierra la sesión de esos gestores).
+unset COCINA_DATABASE_URL COCINA_JWT_SECRET COCINA_APP_ENV COCINA_PHOTOS_ROOT COCINA_BUSINESS_TIMEZONE
+
+# 5. Reiniciar:
 sudo systemctl start cocina-control.service
 
-# 5. Verificar:
+# 6. Verificar:
 curl -sf http://127.0.0.1:8001/health && echo "OK"
 ```
 
-**Prerrequisito**: el `git checkout` asume que `${DEPLOY_PATH}` es un clon git.
-Ver "Bootstrap del server" para inicializarlo así.
+**Prerrequisitos**:
+- El `git checkout` asume que `${DEPLOY_PATH}` es un clon git. Ver "Bootstrap del server" para inicializarlo así.
+- Si el rollback te asusta, corré primero `sudo -iu cocina bash -lc 'cd /opt/cocina-control && uv run alembic current'` para saber en qué revisión de schema está la base y decidir si conviene el rollback rápido o el lento.
 
 ### 2. Rollback lento: rehacer un release al tag anterior
 
@@ -209,6 +218,10 @@ sudo -iu cocina bash -c 'cd /opt/cocina-control && mkdir -p backups frontend-dis
 
 Este clon es lo que permite el rollback rápido con `git checkout`. El robot de despacho hace `rsync --delete` que preserva `.git/` (está en el exclude).
 
+**Si el repo pasa a ser privado**: el clone anónimo por HTTPS falla. Dos alternativas:
+- Clonar por SSH con una deploy key: `ssh-keygen -t ed25519 -f ~/.ssh/repo_readonly -N "" -C "readonly@bonabowl"`, agregar `~/.ssh/repo_readonly.pub` como **Deploy Key con acceso de sólo lectura** en el repo de GitHub, y clonar con `git clone git@github.com:giovandojorgegustavo-hub/cocina-control.git .` desde el usuario `cocina`.
+- O crear un Personal Access Token con scope `repo:read` y clonar con `https://<TOKEN>@github.com/...` (el token queda en `.git/config`; permisos 600).
+
 ### 6. Archivo de env vars
 
 Crear `/etc/cocina-control/env` con el contenido de arriba. Permisos 600.
@@ -249,10 +262,10 @@ sudo systemctl start cocina-control.service
 Crear `/etc/sudoers.d/cocina-control-deploy`:
 
 ```
-cocina ALL=(root) NOPASSWD: /bin/systemctl restart cocina-control.service, /bin/systemctl status cocina-control.service, /bin/systemctl stop cocina-control.service, /bin/systemctl start cocina-control.service
+cocina ALL=(root) NOPASSWD: /bin/systemctl restart cocina-control.service, /bin/systemctl status cocina-control.service, /bin/systemctl status cocina-control.service --no-pager, /bin/systemctl stop cocina-control.service, /bin/systemctl start cocina-control.service
 ```
 
-`chmod 440`. Reglas mínimas — sólo lo que el deploy necesita.
+`chmod 440`. Reglas mínimas — sólo lo que el deploy necesita. Notá que `--no-pager` está explícito porque el workflow lo usa así (`sudo /bin/systemctl status cocina-control.service --no-pager`), y sudoers matchea el comando **completo** con sus argumentos: sin la línea con `--no-pager` el paso "Report failure" del release fallaría con "sudo: command not allowed".
 
 ### 9. Llave SSH para el deploy user
 
