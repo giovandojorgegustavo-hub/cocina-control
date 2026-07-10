@@ -87,9 +87,9 @@ export async function downloadCsv(
     throw new CsvAuthError()
   }
 
-  // Same convention as src/lib/api.ts: empty means same-origin (relative path).
-  // In dev the Vite proxy routes /api to the backend; in prod Caddy does the same.
-  const baseUrl = import.meta.env.VITE_API_URL ?? ''
+  // Same convention as src/lib/api.ts: VITE_API_URL wins if set; otherwise derive
+  // from BASE_URL so the request goes to /interno/api/v1/... in production.
+  const baseUrl = import.meta.env.VITE_API_URL || import.meta.env.BASE_URL.replace(/\/$/, '')
   const url = `${baseUrl}/api/v1/dashboard/export?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&type=${type}`
 
   const response = await fetch(url, {

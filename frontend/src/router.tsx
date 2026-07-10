@@ -13,6 +13,11 @@ import { Tablero } from './pages/Tablero'
 import { Trazabilidad } from './pages/Trazabilidad'
 import { RequireAuth, RequireRole } from './lib/guards'
 
+// React Router requires basename WITHOUT trailing slash.
+// import.meta.env.BASE_URL is injected by Vite and equals basePath from vite.config.ts.
+// When BASE_URL is '/', basename becomes '' — identical to the current behaviour.
+const basename = import.meta.env.BASE_URL.replace(/\/$/, '')
+
 export const router = createBrowserRouter([
   {
     path: '/login',
@@ -132,4 +137,4 @@ export const router = createBrowserRouter([
     path: '*',
     element: <Navigate to="/login" replace />,
   },
-])
+], { basename })

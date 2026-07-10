@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test:e2e": "playwright test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify:base-build": "node tests/scripts/verify-base-build.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.16",
