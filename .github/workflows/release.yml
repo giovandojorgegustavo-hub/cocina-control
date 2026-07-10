@@ -4,14 +4,277 @@ on:
   push:
     tags: ["v*"]
 
+# Only one release run at a time. If a later tag is pushed while an earlier one
+# is still deploying, the new one queues and the old finishes cleanly (no cancel
+# — we do not want a half-migrated database).
+concurrency:
+  group: release-produccion
+  cancel-in-progress: false
+
+env:
+  # Backend port on the production server. Caddy proxies /interno/api/* here.
+  # Kept in the workflow (not a secret) so the health check step is auditable.
+  BACKEND_PORT: "8001"
+
 jobs:
-  despachar:
+  # -------------------------------------------------------------------------
+  # 1. Tests — same guards as every PR, but against the tagged ref.
+  #    Reject the release early if the tagged commit does not pass.
+  # -------------------------------------------------------------------------
+  tests:
+    name: Tests contra el tag
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: cocina
+          POSTGRES_PASSWORD: cocina
+          POSTGRES_DB: cocina_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
-      - name: Deploy a dev (simulado)
-        run: echo "Desplegando ${{ github.ref_name }} en DEV..."
-      - name: Deploy a preprod (simulado)
-        run: echo "Desplegando ${{ github.ref_name }} en PREPROD..."
-      - name: Deploy a prod (simulado)
-        run: echo "Desplegando ${{ github.ref_name }} en PROD... listo"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.28"
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Backend dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Backend tests
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://cocina:cocina@localhost:5432/cocina_test
+          COCINA_JWT_SECRET: test-secret-ci-only-minimum-32-chars-abcdef
+        run: uv run pytest -v
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('frontend/package-lock.json') }}
+
+      - name: Install Playwright chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Frontend tests
+        working-directory: frontend
+        run: npx playwright test
+
+      - name: Verify base-path build
+        working-directory: frontend
+        run: npm run verify:base-build
+
+  # -------------------------------------------------------------------------
+  # 2. Build — produce the production frontend bundle for /interno/.
+  #    Uploaded as an artifact; the deploy job rsyncs it to the server.
+  # -------------------------------------------------------------------------
+  build:
+    name: Build frontend para /interno/
+    runs-on: ubuntu-latest
+    needs: tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build with VITE_BASE_PATH=/interno/
+        working-directory: frontend
+        env:
+          VITE_BASE_PATH: /interno/
+        run: npm run build
+
+      - name: Upload frontend bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+          retention-days: 30
+
+  # -------------------------------------------------------------------------
+  # 3. Deploy — requires manual approval via the 'produccion' environment.
+  #    Everything after this point runs on the production server via SSH.
+  # -------------------------------------------------------------------------
+  deploy:
+    name: Deploy a produccion
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: produccion
+      # bonabowl.com/interno is the public URL after the deploy.
+      url: https://bonabowl.com/interno/
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download frontend bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend-dist/
+
+      - name: Setup SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+
+      - name: Trust the production host key
+        # ssh-keyscan records the current host key. In a hardened setup a static
+        # PROD_SSH_HOST_KEY secret would be pinned instead. Using keyscan here
+        # is a pragmatic default; upgrade to a pinned key when the ops team
+        # provides it (issue in docs/despliegue.md).
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -H "${SSH_HOST}" >> ~/.ssh/known_hosts
+
+      # -------------------------------------------------------------------
+      # 3a. pg_dump BEFORE touching code or running migrations.
+      #     If this fails, we abort the whole release. No half-migrations.
+      # -------------------------------------------------------------------
+      - name: Backup PostgreSQL (pg_dump)
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          DEPLOY_PATH: ${{ secrets.PROD_DEPLOY_PATH }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          ssh "${SSH_USER}@${SSH_HOST}" \
+            "TAG='${TAG}' DEPLOY_PATH='${DEPLOY_PATH}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          set -a; source /etc/cocina-control/env; set +a
+          mkdir -p "${DEPLOY_PATH}/backups"
+          TS=$(date -u +%Y%m%dT%H%M%SZ)
+          OUT="${DEPLOY_PATH}/backups/pre-${TAG}-${TS}.sql.gz"
+          echo "Dumping to ${OUT}"
+          # Strip the driver prefix so pg_dump gets a plain libpq URL.
+          DBURL="${COCINA_DATABASE_URL#postgresql+psycopg://}"
+          pg_dump --dbname="postgresql://${DBURL}" | gzip > "${OUT}"
+          ls -lh "${OUT}"
+          REMOTE
+
+      # -------------------------------------------------------------------
+      # 3b. Rsync the tagged source tree (backend + migrations + docs).
+      #     Exclude everything the server generates or manages locally.
+      # -------------------------------------------------------------------
+      - name: Rsync backend source
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          DEPLOY_PATH: ${{ secrets.PROD_DEPLOY_PATH }}
+        run: |
+          rsync -avz --delete \
+            --exclude '.git/' \
+            --exclude 'node_modules/' \
+            --exclude '.venv/' \
+            --exclude 'frontend/dist/' \
+            --exclude 'frontend/dist-interno/' \
+            --exclude 'frontend/node_modules/' \
+            --exclude 'frontend/test-results/' \
+            --exclude 'var/' \
+            --exclude 'backups/' \
+            --exclude 'frontend-dist/' \
+            ./ "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/"
+
+      # -------------------------------------------------------------------
+      # 3c. Rsync the pre-built frontend bundle to a dedicated directory
+      #     that Caddy serves as static files (see docs/despliegue.md).
+      # -------------------------------------------------------------------
+      - name: Rsync frontend bundle
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          DEPLOY_PATH: ${{ secrets.PROD_DEPLOY_PATH }}
+        run: |
+          rsync -avz --delete \
+            frontend-dist/ \
+            "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/frontend-dist/"
+
+      # -------------------------------------------------------------------
+      # 3d. Install backend deps against the frozen lockfile, migrate,
+      #     restart the systemd unit.
+      # -------------------------------------------------------------------
+      - name: Install deps, migrate, restart
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          DEPLOY_PATH: ${{ secrets.PROD_DEPLOY_PATH }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          ssh "${SSH_USER}@${SSH_HOST}" \
+            "TAG='${TAG}' DEPLOY_PATH='${DEPLOY_PATH}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "${DEPLOY_PATH}"
+          echo "--- Installing frozen deps ---"
+          uv sync --frozen
+          echo "--- Running alembic upgrade head ---"
+          set -a; source /etc/cocina-control/env; set +a
+          uv run alembic upgrade head
+          echo "--- Restarting cocina-control.service ---"
+          sudo /bin/systemctl restart cocina-control.service
+          echo "--- Deployed tag: ${TAG} ---"
+          REMOTE
+
+      - name: Verify /health responds
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+        run: |
+          set -euo pipefail
+          ssh "${SSH_USER}@${SSH_HOST}" \
+            "BACKEND_PORT='${BACKEND_PORT}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          echo "Polling http://127.0.0.1:${BACKEND_PORT}/health for up to 30s..."
+          for i in $(seq 1 15); do
+            if curl -sf "http://127.0.0.1:${BACKEND_PORT}/health" > /dev/null; then
+              echo "OK — /health responded on attempt ${i}"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "FAILED — /health did not respond in 30 seconds"
+          sudo /bin/systemctl status cocina-control.service --no-pager || true
+          exit 1
+          REMOTE
+
+      - name: Report success
+        if: success()
+        env:
+          DEPLOY_PATH: ${{ secrets.PROD_DEPLOY_PATH }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          echo "Release ${TAG} deployed to https://bonabowl.com/interno/"
+          echo "Backup lives in ${DEPLOY_PATH}/backups/pre-${TAG}-*.sql.gz"
