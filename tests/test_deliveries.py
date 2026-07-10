@@ -1373,11 +1373,11 @@ async def test_operator_correct_next_day_returns_403(
 ) -> None:
     """Operator cannot correct an item when the delivery was validated on a previous day.
 
-    The correction window is anchored to delivery.validated_at (UTC-3), not to
-    item.created_at.
+    The correction window is anchored to delivery.validated_at (business timezone,
+    default America/Lima), not to item.created_at.
     """
     p1, *_ = active_products
-    # Validated 48 hours ago → previous calendar day in UTC-3.
+    # Validated 48 hours ago → previous calendar day in the business timezone.
     yesterday = datetime.now(UTC) - timedelta(hours=48)
     delivery, item = _make_validated_delivery_with_item(
         db_session, owner_user.id, p1, item_created_at=yesterday, validated_at=yesterday
@@ -1599,70 +1599,82 @@ async def test_correct_without_reason_stores_null(
 # ---------------------------------------------------------------------------
 
 
-def test_is_same_calendar_day_argentina_edge_cases() -> None:
-    """Test edge cases for the UTC-3 calendar-day comparison."""
-    from cocina_control.security.time_windows import (
-        ARGENTINA_TZ,
-        is_same_calendar_day_argentina,
-    )
+def test_is_same_calendar_day_local_edge_cases() -> None:
+    """Test edge cases for the business-timezone calendar-day comparison.
 
-    # 23:59 UTC-3 and 00:00 UTC-3 the next calendar day → different days.
-    d1 = datetime(2026, 7, 9, 23, 59, tzinfo=ARGENTINA_TZ)   # 23:59 on July 9 in AR
-    d2 = datetime(2026, 7, 10, 0, 0, tzinfo=ARGENTINA_TZ)    # 00:00 on July 10 in AR
-    assert not is_same_calendar_day_argentina(d1, d2)
+    All timestamps use Lima (UTC-5) as the reference timezone, which is the
+    configured default.  The function is generic and works for any IANA zone.
+    """
+    from zoneinfo import ZoneInfo
 
-    # 00:01 UTC is 21:01 UTC-3 on July 8 in AR →
-    # 23:59 UTC-3 on July 9 is the NEXT day → different.
-    d3 = datetime(2026, 7, 9, 0, 1, tzinfo=UTC)             # 21:01 AR July 8
-    d4 = datetime(2026, 7, 9, 23, 59, tzinfo=ARGENTINA_TZ)  # 23:59 AR July 9
-    assert not is_same_calendar_day_argentina(d3, d4)
+    from cocina_control.security.time_windows import is_same_calendar_day_local
+
+    LIMA_TZ = ZoneInfo("America/Lima")
+
+    # 23:59 Lima and 00:00 Lima the next calendar day → different days.
+    d1 = datetime(2026, 7, 9, 23, 59, tzinfo=LIMA_TZ)    # 23:59 on July 9 in Lima
+    d2 = datetime(2026, 7, 10, 0, 0, tzinfo=LIMA_TZ)     # 00:00 on July 10 in Lima
+    assert not is_same_calendar_day_local(d1, d2)
+
+    # 00:01 UTC is 19:01 Lima July 8 →
+    # 23:59 Lima July 9 is the NEXT day → different.
+    d3 = datetime(2026, 7, 9, 0, 1, tzinfo=UTC)           # 19:01 Lima July 8
+    d4 = datetime(2026, 7, 9, 23, 59, tzinfo=LIMA_TZ)    # 23:59 Lima July 9
+    assert not is_same_calendar_day_local(d3, d4)
 
     # Same instant expressed in two timezones → same calendar day.
-    d5 = datetime(2026, 7, 9, 15, 0, tzinfo=ARGENTINA_TZ)   # 15:00 AR July 9
-    d6 = datetime(2026, 7, 9, 18, 0, tzinfo=UTC)             # 15:00 AR July 9 (UTC+0+3)
-    assert is_same_calendar_day_argentina(d5, d6)
+    d5 = datetime(2026, 7, 9, 15, 0, tzinfo=LIMA_TZ)     # 15:00 Lima July 9
+    d6 = datetime(2026, 7, 9, 20, 0, tzinfo=UTC)          # 15:00 Lima July 9 (UTC+0+5)
+    assert is_same_calendar_day_local(d5, d6)
 
-    # Noon UTC (09:00 AR) and 23:59 AR → same calendar day.
-    d7 = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)             # 09:00 AR July 9
-    d8 = datetime(2026, 7, 9, 23, 59, tzinfo=ARGENTINA_TZ)  # 23:59 AR July 9
-    assert is_same_calendar_day_argentina(d7, d8)
+    # Noon UTC (07:00 Lima) and 23:59 Lima → same calendar day.
+    d7 = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)          # 07:00 Lima July 9
+    d8 = datetime(2026, 7, 9, 23, 59, tzinfo=LIMA_TZ)    # 23:59 Lima July 9
+    assert is_same_calendar_day_local(d7, d8)
 
-    # Midnight UTC (21:00 AR previous day) and 23:00 AR → same calendar day.
-    d9 = datetime(2026, 7, 10, 0, 0, tzinfo=UTC)             # 21:00 AR July 9
-    d10 = datetime(2026, 7, 9, 23, 0, tzinfo=ARGENTINA_TZ)  # 23:00 AR July 9
-    assert is_same_calendar_day_argentina(d9, d10)
+    # 05:00 UTC (00:00 Lima) and 23:00 Lima → same calendar day.
+    d9 = datetime(2026, 7, 10, 5, 0, tzinfo=UTC)          # 00:00 Lima July 10
+    d10 = datetime(2026, 7, 10, 23, 0, tzinfo=LIMA_TZ)   # 23:00 Lima July 10
+    assert is_same_calendar_day_local(d9, d10)
 
-
-def test_is_same_calendar_day_argentina_year_boundary() -> None:
-    """Dec 31 23:59 UTC-3 and Jan 1 00:00 UTC-3 are different days."""
-    from cocina_control.security.time_windows import (
-        ARGENTINA_TZ,
-        is_same_calendar_day_argentina,
-    )
-
-    dec_31 = datetime(2023, 12, 31, 23, 59, tzinfo=ARGENTINA_TZ)
-    jan_1 = datetime(2024, 1, 1, 0, 0, tzinfo=ARGENTINA_TZ)
-    assert not is_same_calendar_day_argentina(dec_31, jan_1)
-
-    # Same instant in UTC: Dec 31 23:59 AR = Jan 1 02:59 UTC
-    jan_1_utc = datetime(2024, 1, 1, 2, 59, tzinfo=UTC)
-    assert is_same_calendar_day_argentina(dec_31, jan_1_utc)
+    # 04:59 UTC is still July 9 23:59 Lima (not July 10).
+    d11 = datetime(2026, 7, 10, 4, 59, tzinfo=UTC)        # 23:59 Lima July 9
+    d12 = datetime(2026, 7, 9, 23, 59, tzinfo=LIMA_TZ)   # 23:59 Lima July 9
+    assert is_same_calendar_day_local(d11, d12)
 
 
-def test_is_same_calendar_day_argentina_month_boundary() -> None:
-    """Jan 31 23:59 UTC-3 and Feb 1 00:00 UTC-3 are different days."""
-    from cocina_control.security.time_windows import (
-        ARGENTINA_TZ,
-        is_same_calendar_day_argentina,
-    )
+def test_is_same_calendar_day_local_year_boundary() -> None:
+    """Dec 31 23:59 Lima and Jan 1 00:00 Lima are different days."""
+    from zoneinfo import ZoneInfo
 
-    jan_31 = datetime(2026, 1, 31, 23, 59, tzinfo=ARGENTINA_TZ)
-    feb_1 = datetime(2026, 2, 1, 0, 0, tzinfo=ARGENTINA_TZ)
-    assert not is_same_calendar_day_argentina(jan_31, feb_1)
+    from cocina_control.security.time_windows import is_same_calendar_day_local
 
-    # Still same day: Jan 31 23:30 AR and Jan 31 23:59 AR.
-    jan_31_early = datetime(2026, 1, 31, 23, 30, tzinfo=ARGENTINA_TZ)
-    assert is_same_calendar_day_argentina(jan_31, jan_31_early)
+    LIMA_TZ = ZoneInfo("America/Lima")
+
+    dec_31 = datetime(2023, 12, 31, 23, 59, tzinfo=LIMA_TZ)
+    jan_1 = datetime(2024, 1, 1, 0, 0, tzinfo=LIMA_TZ)
+    assert not is_same_calendar_day_local(dec_31, jan_1)
+
+    # Same instant in UTC: Dec 31 23:59 Lima = Jan 1 04:59 UTC
+    jan_1_utc = datetime(2024, 1, 1, 4, 59, tzinfo=UTC)
+    assert is_same_calendar_day_local(dec_31, jan_1_utc)
+
+
+def test_is_same_calendar_day_local_month_boundary() -> None:
+    """Jan 31 23:59 Lima and Feb 1 00:00 Lima are different days."""
+    from zoneinfo import ZoneInfo
+
+    from cocina_control.security.time_windows import is_same_calendar_day_local
+
+    LIMA_TZ = ZoneInfo("America/Lima")
+
+    jan_31 = datetime(2026, 1, 31, 23, 59, tzinfo=LIMA_TZ)
+    feb_1 = datetime(2026, 2, 1, 0, 0, tzinfo=LIMA_TZ)
+    assert not is_same_calendar_day_local(jan_31, feb_1)
+
+    # Still same day: Jan 31 23:30 Lima and Jan 31 23:59 Lima.
+    jan_31_early = datetime(2026, 1, 31, 23, 30, tzinfo=LIMA_TZ)
+    assert is_same_calendar_day_local(jan_31, jan_31_early)
 
 
 # ===========================================================================

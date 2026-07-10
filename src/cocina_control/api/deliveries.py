@@ -75,7 +75,7 @@ from cocina_control.schemas.delivery import (
     DeliveryListItem,
     DeliveryUpdate,
 )
-from cocina_control.security.time_windows import is_same_calendar_day_argentina
+from cocina_control.security.time_windows import is_same_calendar_day_local
 
 log = logging.getLogger(__name__)
 
@@ -731,8 +731,8 @@ def correct_item(
     ----------------------------------
     - Owner: can correct at any time, no window restriction.
     - Operator: window is open only if delivery.validated_at falls on the same
-      calendar day (UTC-3) as now.  This anchors the window to the validation
-      event, not to the item creation date.
+      calendar day (business timezone, default America/Lima) as now.  This
+      anchors the window to the validation event, not to the item creation date.
 
     Why validated_at and not item.created_at
     -----------------------------------------
@@ -784,7 +784,7 @@ def correct_item(
     # Enforce time-window for operators.
     # Anchor: delivery.validated_at (not item.created_at).  See docstring.
     if current_user.role == "operator":
-        if delivery.validated_at is None or not is_same_calendar_day_argentina(
+        if delivery.validated_at is None or not is_same_calendar_day_local(
             delivery.validated_at, now
         ):
             raise HTTPException(

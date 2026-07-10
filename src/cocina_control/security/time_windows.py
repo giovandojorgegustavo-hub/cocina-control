@@ -1,37 +1,41 @@
 """Time window helpers for business rules that depend on calendar day.
 
-Argentina does not observe daylight saving time, so UTC-3 is a fixed offset
-year-round.  Using a fixed tzinfo avoids any ambiguity that would arise from
-a named IANA timezone with historical DST transitions.
+The business timezone is configured via COCINA_BUSINESS_TIMEZONE (default
+America/Lima, UTC-5, no DST).  All calendar-day comparisons use the configured
+timezone so that day boundaries match the wall clock the kitchen operates on.
+
+ZoneInfo handles DST transitions correctly for any IANA timezone — if the
+business ever moves to a DST-observing location the code remains correct.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
-# Argentina Standard Time: UTC-3, fixed offset (no DST).
-ARGENTINA_TZ = timezone(timedelta(hours=-3))
+from cocina_control.config import get_settings
 
 
-def is_same_calendar_day_argentina(a: datetime, b: datetime) -> bool:
-    """Return True if *a* and *b* fall on the same calendar day in UTC-3.
+def is_same_calendar_day_local(a: datetime, b: datetime) -> bool:
+    """Return True if *a* and *b* fall on the same calendar day in the business timezone.
+
+    The business timezone is configured via COCINA_BUSINESS_TIMEZONE
+    (default America/Lima).
 
     Both arguments are expected to be timezone-aware datetimes; if they are
     naive they are treated as UTC (standard library behaviour for astimezone).
 
     Edge cases:
-    - 23:59 UTC-3 and 00:00 UTC-3 the next day → False (different days).
-    - 00:01 UTC and 23:59 UTC-3 of the previous day → same day in UTC-3 iff
-      they map to the same date in UTC-3.
+    - 23:59 local and 00:00 local the next day → False (different days).
+    - 00:01 UTC and 23:59 local of the previous day → same day in local iff
+      they map to the same date in the business timezone.
 
-    >>> from datetime import timezone, timedelta
-    >>> tz = timezone(timedelta(hours=-3))
-    >>> d1 = datetime(2026, 7, 9, 23, 59, tzinfo=tz)   # 23:59 Argentina
-    >>> d2 = datetime(2026, 7, 10, 0, 0, tzinfo=tz)    # 00:00 Argentina next day
-    >>> is_same_calendar_day_argentina(d1, d2)
-    False
-    >>> d3 = datetime(2026, 7, 9, 3, 0, tzinfo=timezone.utc)  # 00:00 Argentina
-    >>> is_same_calendar_day_argentina(d1, d3)
-    True
+    Example (Lima UTC-5):
+      d1 = datetime(2026, 7, 9, 23, 59, tzinfo=ZoneInfo("America/Lima"))  # 23:59 Lima July 9
+      d2 = datetime(2026, 7, 10, 0, 0, tzinfo=ZoneInfo("America/Lima"))   # 00:00 Lima July 10
+      is_same_calendar_day_local(d1, d2)  # → False
+
+      from datetime import UTC
+      d3 = datetime(2026, 7, 10, 4, 0, tzinfo=UTC)  # 23:00 Lima July 9
+      is_same_calendar_day_local(d1, d3)  # → True
     """
-    date_a = a.astimezone(ARGENTINA_TZ).date()
-    date_b = b.astimezone(ARGENTINA_TZ).date()
-    return date_a == date_b
+    tz = ZoneInfo(get_settings().business_timezone)
+    return a.astimezone(tz).date() == b.astimezone(tz).date()

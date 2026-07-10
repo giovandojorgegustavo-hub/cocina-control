@@ -11,19 +11,24 @@ Fixtures inherited from conftest.py:
 """
 
 import uuid
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.orm import Session
 
+from cocina_control.config import get_settings
 from cocina_control.models.delivery import Delivery, DeliveryItem
 from cocina_control.models.delivery_order import DeliveryOrder, DeliveryOrderItem
 from cocina_control.models.inventory import InventoryCount, InventoryCountItem
 from cocina_control.models.product import Product
 
 _BASE = "/api/v1/dashboard"
-_TZ_ARG = timezone(timedelta(hours=-3))
+
+
+def _business_tz() -> ZoneInfo:
+    return ZoneInfo(get_settings().business_timezone)
 
 
 # ---------------------------------------------------------------------------
@@ -205,28 +210,40 @@ def _make_count_item(
 
 
 # ---------------------------------------------------------------------------
-# Date helpers — build from/to query params for "today" in Argentina time.
+# Date helpers — build from/to query params for "today" in the business timezone.
 # ---------------------------------------------------------------------------
 
 
-def _arg_today() -> str:
-    """Today in Argentina (UTC-3) as YYYY-MM-DD string."""
-    return datetime.now(_TZ_ARG).strftime("%Y-%m-%d")
+def _local_today() -> str:
+    """Today in the business timezone as YYYY-MM-DD string."""
+    return datetime.now(_business_tz()).strftime("%Y-%m-%d")
 
 
-def _arg_yesterday() -> str:
-    """Yesterday in Argentina (UTC-3) as YYYY-MM-DD string."""
-    return (datetime.now(_TZ_ARG) - timedelta(days=1)).strftime("%Y-%m-%d")
+def _local_yesterday() -> str:
+    """Yesterday in the business timezone as YYYY-MM-DD string."""
+    return (datetime.now(_business_tz()) - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
-def _arg_tomorrow() -> str:
-    """Tomorrow in Argentina (UTC-3) as YYYY-MM-DD string."""
-    return (datetime.now(_TZ_ARG) + timedelta(days=1)).strftime("%Y-%m-%d")
+def _local_tomorrow() -> str:
+    """Tomorrow in the business timezone as YYYY-MM-DD string."""
+    return (datetime.now(_business_tz()) + timedelta(days=1)).strftime("%Y-%m-%d")
 
 
-def _arg_past(days: int) -> str:
-    """N days ago in Argentina."""
-    return (datetime.now(_TZ_ARG) - timedelta(days=days)).strftime("%Y-%m-%d")
+def _local_past(days: int) -> str:
+    """N days ago in the business timezone."""
+    return (datetime.now(_business_tz()) - timedelta(days=days)).strftime("%Y-%m-%d")
+
+
+def _local_midday_today_utc() -> datetime:
+    """Today at 12:00 in the business timezone, as an aware UTC datetime.
+
+    Used to seed 'in-range' events deterministically: midday of the calendar
+    day in the business timezone is always within [today 00:00, today 23:59],
+    no matter what UTC time the CI runs at.
+    """
+    now_local = datetime.now(_business_tz())
+    midday_local = now_local.replace(hour=12, minute=0, second=0, microsecond=0)
+    return midday_local.astimezone(UTC)
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +281,9 @@ def seed_scenario(session: Session, owner_id: uuid.UUID, operator_id: uuid.UUID)
     _make_count_item(session, prior_count.id, palta.id, operator_id, "20", created_at=ten_days_ago)
 
     # Validated delivery today (IN range) — entries_qty = 8.
-    in_range_ts = datetime.now(UTC) - timedelta(minutes=30)
+    # Use midday in the business timezone so this is always within today's range
+    # regardless of what UTC time the CI runs at.
+    in_range_ts = _local_midday_today_utc()
     delivery = _make_delivery(session, owner_id, "validada", validated_at=in_range_ts)
     delivery.created_at = in_range_ts
     session.flush()
@@ -298,7 +317,7 @@ async def test_summary_no_prior_count_shows_consumption_unavailable(
     """A product with no prior count returns consumption_available=False."""
     _make_product(db_session, owner_user.id, "HARINA")
 
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/summary?from={today}&to={today}",
         headers=_auth(owner_token),
@@ -331,7 +350,7 @@ async def test_summary_consumption_formula_correct(
     palta, _ = seed_scenario(db_session, owner_user.id, operator_user.id)
 
     # Range: today only (seed_scenario puts in-range events in the last 30 minutes).
-    today = _arg_today()
+    today = _local_today()
 
     resp = await client.get(
         f"{_BASE}/summary?from={today}&to={today}",
@@ -371,7 +390,7 @@ async def test_summary_alert_on_negative_consumption(
     )
 
     # Count in range: today, 30 minutes ago.
-    in_range_ts = datetime.now(UTC) - timedelta(minutes=30)
+    in_range_ts = _local_midday_today_utc()
     count_in_range = _make_count(db_session, operator_user.id, completed_at=in_range_ts)
     count_in_range.started_at = in_range_ts
     count_in_range.created_at = in_range_ts
@@ -380,7 +399,7 @@ async def test_summary_alert_on_negative_consumption(
         db_session, count_in_range.id, palta.id, operator_user.id, "10", created_at=in_range_ts
     )
 
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/summary?from={today}&to={today}",
         headers=_auth(owner_token),
@@ -419,7 +438,7 @@ async def test_summary_low_stock_list_filters_by_threshold(
     _make_count_item(db_session, count.id, palta.id, operator_user.id, "3", created_at=now)
     _make_count_item(db_session, count.id, pollo.id, operator_user.id, "1", created_at=now)
 
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/summary?from={today}&to={today}",
         headers=_auth(owner_token),
@@ -456,7 +475,7 @@ async def test_summary_orders_summary_counts_photo_only(
     pending.created_at = now
     db_session.flush()
 
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/summary?from={today}&to={today}",
         headers=_auth(owner_token),
@@ -472,7 +491,7 @@ async def test_summary_operator_returns_403(
     client: AsyncClient,
     operator_token: str,
 ):
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/summary?from={today}&to={today}",
         headers=_auth(operator_token),
@@ -482,7 +501,7 @@ async def test_summary_operator_returns_403(
 
 @pytest.mark.asyncio
 async def test_summary_no_auth_returns_401(client: AsyncClient):
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(f"{_BASE}/summary?from={today}&to={today}")
     assert resp.status_code == 401
 
@@ -508,7 +527,7 @@ async def test_summary_only_considers_validated_deliveries(
     )
 
     # Count in range = 10 (same as inicio, no change if no entries counted).
-    in_range_ts = datetime.now(UTC) - timedelta(minutes=30)
+    in_range_ts = _local_midday_today_utc()
     count_in_range = _make_count(db_session, operator_user.id, completed_at=in_range_ts)
     count_in_range.started_at = in_range_ts
     count_in_range.created_at = in_range_ts
@@ -527,7 +546,7 @@ async def test_summary_only_considers_validated_deliveries(
         db_session, pending_delivery.id, palta.id, owner_user.id, "15", None, created_at=in_range_ts
     )
 
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/summary?from={today}&to={today}",
         headers=_auth(owner_token),
@@ -570,7 +589,7 @@ async def test_summary_only_considers_completed_orders(
     db_session.flush()
     _make_delivery_order_item(db_session, pending_order.id, palta.id, operator_user.id, "5")
 
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/summary?from={today}&to={today}",
         headers=_auth(owner_token),
@@ -605,7 +624,7 @@ async def test_summary_uses_leaf_items(
     )
 
     # Validated delivery today (in range) with a correction.
-    in_range_ts = datetime.now(UTC) - timedelta(minutes=30)
+    in_range_ts = _local_midday_today_utc()
     delivery = _make_delivery(db_session, owner_user.id, "validada", validated_at=in_range_ts)
     delivery.created_at = in_range_ts
     db_session.flush()
@@ -628,7 +647,7 @@ async def test_summary_uses_leaf_items(
         db_session, count_in_range.id, palta.id, operator_user.id, "18", created_at=in_range_ts
     )
 
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/summary?from={today}&to={today}",
         headers=_auth(owner_token),
@@ -684,7 +703,7 @@ async def test_traceability_returns_all_events_for_product(
     db_session.flush()
     c_item = _make_count_item(db_session, count.id, palta.id, operator_user.id, "7", created_at=now)
 
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/traceability/{palta.id}?from={today}&to={today}",
         headers=_auth(owner_token),
@@ -731,7 +750,7 @@ async def test_traceability_ordered_by_date_asc(
     db_session.flush()
     _make_delivery_order_item(db_session, order.id, palta.id, operator_user.id, "2", created_at=t3)
 
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/traceability/{palta.id}?from={today}&to={today}",
         headers=_auth(owner_token),
@@ -767,7 +786,7 @@ async def test_traceability_includes_corrections(
         corrects_id=original.id, created_at=now
     )
 
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/traceability/{palta.id}?from={today}&to={today}",
         headers=_auth(owner_token),
@@ -791,7 +810,7 @@ async def test_traceability_operator_returns_403(
     owner_user,
 ):
     palta = _make_product(db_session, owner_user.id, "PALTA")
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/traceability/{palta.id}?from={today}&to={today}",
         headers=_auth(operator_token),
@@ -805,7 +824,7 @@ async def test_traceability_nonexistent_product_returns_404(
     owner_token: str,
 ):
     fake_id = uuid.uuid4()
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/traceability/{fake_id}?from={today}&to={today}",
         headers=_auth(owner_token),
@@ -827,7 +846,7 @@ async def test_export_csv_bom_utf8(
     operator_user,
 ):
     """CSV starts with UTF-8 BOM (\xef\xbb\xbf)."""
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/export?from={today}&to={today}",
         headers=_auth(owner_token),
@@ -847,7 +866,7 @@ async def test_export_csv_content_type(
     operator_user,
 ):
     """Content-Type must be text/csv; charset=utf-8."""
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/export?from={today}&to={today}",
         headers=_auth(owner_token),
@@ -900,7 +919,7 @@ async def test_export_csv_includes_all_rows_original_and_corrections(
         corrects_id=original.id, created_at=now
     )
 
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/export?from={today}&to={today}",
         headers=_auth(owner_token),
@@ -939,7 +958,7 @@ async def test_export_csv_filter_by_type_delivery(
     db_session.flush()
     c_item = _make_count_item(db_session, count.id, palta.id, operator_user.id, "5", created_at=now)
 
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/export?from={today}&to={today}&type=delivery",
         headers=_auth(owner_token),
@@ -962,7 +981,7 @@ async def test_export_csv_operator_returns_403(
     client: AsyncClient,
     operator_token: str,
 ):
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/export?from={today}&to={today}",
         headers=_auth(operator_token),
@@ -1014,7 +1033,7 @@ async def test_export_csv_sanitizes_formula_injection(
         created_at=now,
     )
 
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/export?from={today}&to={today}",
         headers=_auth(owner_token),
@@ -1072,7 +1091,7 @@ async def test_traceability_excludes_items_from_pending_orders(
         db_session, pending_order.id, palta.id, operator_user.id, "7", created_at=now
     )
 
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/traceability/{palta.id}?from={today}&to={today}",
         headers=_auth(owner_token),
@@ -1113,7 +1132,7 @@ async def test_traceability_excludes_items_from_no_leida_deliveries(
         db_session, unread.id, palta.id, operator_user.id, "20", None, created_at=now
     )
 
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/traceability/{palta.id}?from={today}&to={today}",
         headers=_auth(owner_token),
@@ -1173,7 +1192,7 @@ async def test_orders_summary_uses_completion_dates(
     o4.created_at = yesterday_utc
     db_session.flush()
 
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/summary?from={today}&to={today}",
         headers=_auth(owner_token),
@@ -1195,7 +1214,7 @@ async def test_export_invalid_type_returns_400(
     owner_token: str,
 ):
     """An invalid 'type' query param must return HTTP 400, not silently default to 'all'."""
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/export?from={today}&to={today}&type=invalid_value",
         headers=_auth(owner_token),
@@ -1240,7 +1259,7 @@ async def test_export_csv_includes_announced_qty_for_delivery_items(
     db_session.flush()
     _make_count_item(db_session, count.id, palta.id, operator_user.id, "8", created_at=now)
 
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/export?from={today}&to={today}",
         headers=_auth(owner_token),
@@ -1316,7 +1335,7 @@ async def test_orders_summary_excludes_cancelled(
     db_session.add(canceller)
     db_session.flush()
 
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/summary?from={today}&to={today}",
         headers=_auth(owner_token),
@@ -1342,21 +1361,21 @@ async def test_from_equals_to_covers_full_day(
     owner_user,
     operator_user,
 ):
-    """Events at 00:00:01 and 23:59:59 Argentina time on the same day must both
-    appear when from==to is that day.
+    """Events at 00:00:01 and 23:59:59 in the business timezone on the same day
+    must both appear when from==to is that day.
 
     Marked with pytest.mark.timing so it can be excluded from fast runs.
     """
-    from datetime import time, timezone
-    _TZ_ARG_LOCAL = timezone(timedelta(hours=-3))
+    from datetime import time as dt_time
 
-    today_arg = datetime.now(_TZ_ARG_LOCAL).date()
-    start_of_day = datetime.combine(today_arg, time(0, 0, 1), tzinfo=_TZ_ARG_LOCAL)
-    end_of_day = datetime.combine(today_arg, time(23, 59, 59), tzinfo=_TZ_ARG_LOCAL)
+    tz = _business_tz()
+    today_local = datetime.now(tz).date()
+    start_of_day = datetime.combine(today_local, dt_time(0, 0, 1), tzinfo=tz)
+    end_of_day = datetime.combine(today_local, dt_time(23, 59, 59), tzinfo=tz)
 
     palta = _make_product(db_session, owner_user.id, "PALTA")
 
-    # Event at 00:00:01 Argentina.
+    # Event at 00:00:01 local time.
     d1 = _make_delivery(db_session, owner_user.id, "validada", validated_at=start_of_day)
     d1.created_at = start_of_day
     db_session.flush()
@@ -1364,7 +1383,7 @@ async def test_from_equals_to_covers_full_day(
         db_session, d1.id, palta.id, operator_user.id, "5", "5", created_at=start_of_day
     )
 
-    # Event at 23:59:59 Argentina.
+    # Event at 23:59:59 local time.
     d2 = _make_delivery(db_session, owner_user.id, "validada", validated_at=end_of_day)
     d2.created_at = end_of_day
     db_session.flush()
@@ -1372,7 +1391,7 @@ async def test_from_equals_to_covers_full_day(
         db_session, d2.id, palta.id, operator_user.id, "3", "3", created_at=end_of_day
     )
 
-    date_str = today_arg.strftime("%Y-%m-%d")
+    date_str = today_local.strftime("%Y-%m-%d")
     resp = await client.get(
         f"{_BASE}/traceability/{palta.id}?from={date_str}&to={date_str}",
         headers=_auth(owner_token),
@@ -1411,7 +1430,7 @@ async def test_alert_false_when_consumption_zero(
     )
 
     # Delivery in range: entries = 5.
-    in_range_ts = datetime.now(UTC) - timedelta(minutes=30)
+    in_range_ts = _local_midday_today_utc()
     delivery = _make_delivery(db_session, owner_user.id, "validada", validated_at=in_range_ts)
     delivery.created_at = in_range_ts
     db_session.flush()
@@ -1428,7 +1447,7 @@ async def test_alert_false_when_consumption_zero(
         db_session, count_in_range.id, palta.id, operator_user.id, "15", created_at=in_range_ts
     )
 
-    today = _arg_today()
+    today = _local_today()
     resp = await client.get(
         f"{_BASE}/summary?from={today}&to={today}",
         headers=_auth(owner_token),

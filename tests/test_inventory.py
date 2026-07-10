@@ -15,12 +15,12 @@ Domain invariants under test:
 - The operator NEVER sees an expected quantity (blind count).
 - Items are append-only; corrections create new rows.
 - Complete requires ALL active products to have a leaf item.
-- Operator correction window: same calendar day UTC-3 as item.created_at.
+- Operator correction window: same calendar day (business timezone) as item.created_at.
 - UniqueConstraint(corrects_id) prevents concurrent chain bifurcation.
 """
 
 import uuid
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
@@ -455,11 +455,11 @@ async def test_operator_correct_next_day_returns_403(
     owner_user,
     active_products,
 ):
-    """Operator cannot correct an item from the previous calendar day (UTC-3)."""
+    """Operator cannot correct an item from the previous calendar day (business timezone)."""
     papa, _ = active_products
     # Count must be started_by operator so ownership passes; window check fails after.
     count = _make_count(db_session, operator_user.id)
-    # Simulate an item created yesterday in Argentina time.
+    # Simulate an item created yesterday in the business timezone (default America/Lima).
     yesterday_utc = datetime.now(UTC) - timedelta(days=1)
     original = _make_item(
         db_session, count.id, papa.id, operator_user.id,
@@ -708,16 +708,20 @@ async def test_concurrent_complete_second_returns_409(
 
 
 # ===========================================================================
-# UTC-3 time window — is_same_calendar_day_argentina
+# Business-timezone time window — is_same_calendar_day_local
 #
 # The utility function itself is tested in the deliveries test suite.
 # Here we verify that the inventory domain applies the same function correctly
 # for operator corrections, anchored to item.created_at.
+#
+# Tests use unittest.mock.patch to decouple from the wall clock — we verify
+# the endpoint's behaviour when the function returns True or False, without
+# relying on the CI running at a specific UTC time.
 # ===========================================================================
 
 
 @pytest.mark.asyncio
-async def test_operator_correction_at_utc_minus3_midnight_boundary(
+async def test_operator_correction_at_local_midnight_boundary_mocked_same_day(
     client: AsyncClient,
     db_session: Session,
     operator_token: str,
@@ -725,41 +729,29 @@ async def test_operator_correction_at_utc_minus3_midnight_boundary(
     owner_user,
     active_products,
 ):
-    """Item created 30 minutes before Argentina midnight — operator can still correct.
+    """Operator can correct an item when is_same_calendar_day_local returns True.
 
-    Argentina midnight = 03:00 UTC.  An item created at 02:30 UTC is at 23:30
-    Argentina time.  A correction made at 02:50 UTC (23:50 Argentina) is still
-    same-day and must be allowed.
+    The business-timezone comparison is unit-tested in test_deliveries.py.
+    Here we only verify that the inventory endpoint allows the correction when
+    the function returns True, regardless of wall-clock time.
     """
     papa, _ = active_products
-    count = _make_count(db_session, owner_user.id)
-
-    # 02:30 UTC today = 23:30 Argentina today.
-    now_utc = datetime.now(UTC)
-    # Construct a timestamp that is clearly same-day in Argentina by using
-    # the current Argentina date at 23:00 Argentina time.
-    tz_arg = timezone(timedelta(hours=-3))
-    now_arg = now_utc.astimezone(tz_arg)
-    same_day_arg = now_arg.replace(hour=23, minute=0, second=0, microsecond=0)
-    same_day_utc = same_day_arg.astimezone(UTC)
-
-    # Only run this test if same_day_utc is in the past (i.e. we haven't
-    # crossed midnight yet in UTC time).  If 23:00 Argentina is in the future,
-    # skip to avoid a flaky result.
-    if same_day_utc > now_utc:
-        pytest.skip("Test clock is before 23:00 Argentina — boundary case does not apply now")
-
+    count = _make_count(db_session, operator_user.id)
     original = _make_item(
         db_session, count.id, papa.id, operator_user.id,
-        created_at=same_day_utc,
+        created_at=datetime.now(UTC),
     )
 
-    resp = await client.post(
-        f"{_BASE}/{count.id}/items/{original.id}/correct",
-        json={"quantity": "99"},
-        headers=_auth(operator_token),
-    )
-    # Same calendar day in Argentina — must succeed.
+    with patch(
+        "cocina_control.api.inventory.is_same_calendar_day_local",
+        return_value=True,
+    ):
+        resp = await client.post(
+            f"{_BASE}/{count.id}/items/{original.id}/correct",
+            json={"quantity": "99"},
+            headers=_auth(operator_token),
+        )
+
     assert resp.status_code == 201
 
 
@@ -1062,12 +1054,12 @@ async def test_operator_response_hides_corrects_id_and_reason(
 
 
 # ===========================================================================
-# UTC-3 boundary without pytest.skip — using mock (hallazgo #6)
+# Business-timezone boundary — using mock to verify window-closed path
 # ===========================================================================
 
 
 @pytest.mark.asyncio
-async def test_operator_correction_at_utc_minus3_midnight_boundary_mocked(
+async def test_operator_correction_window_closed_when_function_returns_false(
     client: AsyncClient,
     db_session: Session,
     operator_token: str,
@@ -1075,15 +1067,11 @@ async def test_operator_correction_at_utc_minus3_midnight_boundary_mocked(
     owner_user,
     active_products,
 ):
-    """Operator can correct an item at 23:00 Argentina time (same calendar day).
+    """Operator cannot correct an item when is_same_calendar_day_local returns False.
 
-    Uses unittest.mock.patch to pin is_same_calendar_day_argentina so the test
-    always runs regardless of wall-clock time.  The boundary logic itself is
-    unit-tested in test_deliveries.py; here we only verify that the inventory
-    endpoint respects the result of that function.
-
-    We patch the function to always return True, confirming that a truthy result
-    allows the correction through.
+    Patches is_same_calendar_day_local to return False regardless of wall-clock
+    time.  Verifies that the inventory endpoint correctly blocks the correction
+    with 403 when the time-window check fails.
     """
     papa, _ = active_products
     # Count started_by operator so ownership check passes.
@@ -1094,8 +1082,8 @@ async def test_operator_correction_at_utc_minus3_midnight_boundary_mocked(
     )
 
     with patch(
-        "cocina_control.api.inventory.is_same_calendar_day_argentina",
-        return_value=True,
+        "cocina_control.api.inventory.is_same_calendar_day_local",
+        return_value=False,
     ):
         resp = await client.post(
             f"{_BASE}/{count.id}/items/{original.id}/correct",
@@ -1103,7 +1091,8 @@ async def test_operator_correction_at_utc_minus3_midnight_boundary_mocked(
             headers=_auth(operator_token),
         )
 
-    assert resp.status_code == 201
+    assert resp.status_code == 403
+    assert "correction window closed" in resp.json()["detail"].lower()
 
 
 # ===========================================================================

@@ -63,7 +63,7 @@ from cocina_control.schemas.delivery_order import (
     DeliveryOrderListItem,
     DeliveryOrderPhotoResponse,
 )
-from cocina_control.security.time_windows import is_same_calendar_day_argentina
+from cocina_control.security.time_windows import is_same_calendar_day_local
 from cocina_control.services.photos import (
     PhotoValidationError,
     content_type_for_extension,
@@ -552,7 +552,7 @@ def cancel_order(
     "/{order_id}/correct",
     response_model=DeliveryOrderCorrectResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Correct a completed order (operator same-day UTC-3, owner anytime)",
+    summary="Correct a completed order (operator same-day business timezone, owner anytime)",
 )
 def correct_order(
     order_id: uuid.UUID,
@@ -566,7 +566,8 @@ def correct_order(
 
     Permission and time-window:
     - Owner: can correct at any time.
-    - Operator: only on the same calendar day (UTC-3) as completed_at.
+    - Operator: only on the same calendar day (business timezone, default America/Lima)
+      as completed_at.
 
     The order must be 'completed' to be corrected.
     Leaf check: cannot correct an already corrected order.
@@ -594,7 +595,7 @@ def correct_order(
 
     # Enforce time-window for operators.
     if current_user.role == "operator":
-        if order.completed_at is None or not is_same_calendar_day_argentina(
+        if order.completed_at is None or not is_same_calendar_day_local(
             order.completed_at, now
         ):
             raise HTTPException(

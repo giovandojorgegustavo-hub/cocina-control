@@ -55,6 +55,9 @@ the session's completed_at.  Rationale:
   - The owner can always correct, regardless of window, consistent with
     deliveries and docs/diseno.md §2.c Q10.
 
+  Calendar-day comparison uses the business timezone (default America/Lima;
+  configurable via COCINA_BUSINESS_TIMEZONE).
+
 Fail-safe status sets
 ----------------------
 _COUNTABLE_STATUSES and _CORRECTABLE_STATUSES use allowlists, not blocklists.
@@ -85,7 +88,7 @@ from cocina_control.schemas.inventory import (
     InventoryItemResponseOperator,
     InventoryItemResponseOwner,
 )
-from cocina_control.security.time_windows import is_same_calendar_day_argentina
+from cocina_control.security.time_windows import is_same_calendar_day_local
 
 log = logging.getLogger(__name__)
 
@@ -467,8 +470,8 @@ def correct_item(
     Permission and time-window rules
     ----------------------------------
     - Owner: can correct at any time, regardless of window.
-    - Operator: correction window is the same calendar day (UTC-3) as
-      item.created_at.
+    - Operator: correction window is the same calendar day (business timezone,
+      default America/Lima) as item.created_at.
 
     Why item.created_at (not session.completed_at)
     -----------------------------------------------
@@ -481,7 +484,8 @@ def correct_item(
 
     Anchoring to item.created_at gives each item its own natural same-day
     window, which matches the user expectation: "I counted it today, I can
-    fix it today".
+    fix it today".  The calendar-day boundary is evaluated in the business
+    timezone (default America/Lima; configurable via COCINA_BUSINESS_TIMEZONE).
 
     Concurrency (chain bifurcation prevention)
     -------------------------------------------
@@ -514,7 +518,7 @@ def correct_item(
             )
         # Enforce time-window anchored to item.created_at.
         # See module docstring for the rationale vs. session.completed_at.
-        if not is_same_calendar_day_argentina(item.created_at, now):
+        if not is_same_calendar_day_local(item.created_at, now):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Correction window closed for operator",
