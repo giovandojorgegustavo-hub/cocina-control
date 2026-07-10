@@ -474,13 +474,30 @@ test('test_hoy_uses_last_inventory_at_when_available', async ({ page }) => {
 
   const requestedUrls: string[] = []
 
+  // Anchor last_inventory_at to yesterday at noon UTC. Rationale:
+  //   - Default preset is '7d' → from = today - 6 days.
+  //   - 'today' preset with last_inventory_at yesterday → from = yesterday in UTC-3.
+  //   - These two `from` values are guaranteed to differ, so the click on HOY
+  //     changes the queryKey and triggers a refetch. If we used a fixed date
+  //     like 2026-07-05 the test breaks by coincidence whenever `today` happens
+  //     to be exactly 6 days after that date (both presets produce the same from).
+  const nowMs = Date.now()
+  const yesterdayNoonUtc = new Date(nowMs - 24 * 60 * 60 * 1000)
+  yesterdayNoonUtc.setUTCHours(12, 0, 0, 0)
+  const lastInventoryAtIso = yesterdayNoonUtc.toISOString()
+  // Compute expected `from` in UTC-3 (Tablero uses UTC-3 in usePeriod.ts).
+  const yesterdayLocal = new Date(yesterdayNoonUtc.getTime() - 3 * 60 * 60 * 1000)
+  const y = yesterdayLocal.getUTCFullYear()
+  const m = String(yesterdayLocal.getUTCMonth() + 1).padStart(2, '0')
+  const d = String(yesterdayLocal.getUTCDate()).padStart(2, '0')
+  const expectedFrom = `${y}-${m}-${d}`
+
   await page.route(SUMMARY_URL, (route) => {
     requestedUrls.push(route.request().url())
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      // last_inventory_at is 2026-07-05 UTC (= 2026-07-04 in UTC-3 at 21:00)
-      body: JSON.stringify({ ...MOCK_SUMMARY_FULL, last_inventory_at: '2026-07-05T00:00:00Z' }),
+      body: JSON.stringify({ ...MOCK_SUMMARY_FULL, last_inventory_at: lastInventoryAtIso }),
     })
   })
 
@@ -499,12 +516,11 @@ test('test_hoy_uses_last_inventory_at_when_available', async ({ page }) => {
     expect(requestedUrls.length).toBeGreaterThan(countBefore)
   }).toPass()
 
-  // The HOY request must use the last_inventory_at date as `from`, NOT today.
+  // The HOY request must use last_inventory_at as `from`, NOT today.
   const latestUrl = requestedUrls[requestedUrls.length - 1]
   const urlObj = new URL(latestUrl)
   const fromParam = urlObj.searchParams.get('from')
-  // last_inventory_at '2026-07-05T00:00:00Z' in UTC-3 is '2026-07-04'
-  expect(fromParam).toBe('2026-07-04')
+  expect(fromParam).toBe(expectedFrom)
 })
 
 // ---------------------------------------------------------------------------
