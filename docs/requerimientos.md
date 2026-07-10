@@ -89,6 +89,14 @@ Sin recetas, sin BOM, sin componentes. Cada producto se cuenta como una unidad a
 
 - **Cámara del dispositivo:** la app necesita acceso a la cámara de la tablet/celular para las fotos de pedidos. Las fotos se suben asociadas al registro; si no hay conexión, quedan en cola local.
 
+## Convenciones técnicas del negocio
+
+**Zona horaria del negocio**: la cocina opera en Perú → `America/Lima` (UTC-5, sin horario de verano). Todos los cortes de día — ventana de corrección del operario, "hoy" del tablero, filtros `from/to` — se calculan en esta zona horaria. Los timestamps siguen guardándose en UTC en la base; la zona horaria solo afecta la interpretación al agrupar por día calendario.
+
+La zona horaria es **configurable** vía `COCINA_BUSINESS_TIMEZONE` (default `America/Lima`). Si el negocio se muda o abre otra cocina, se ajusta con env var — no requiere cambio de código ni migración.
+
+---
+
 ## Fuera de alcance v0.2
 
 Cada uno de estos ítems se convierte en un issue de GitHub cuando sea el momento. **No** entran a v0.2.

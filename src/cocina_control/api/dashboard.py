@@ -14,9 +14,9 @@ receives 401 or 403 before any query runs.
 Date parameters
 ---------------
 Query params `from` and `to` are required ISO dates (YYYY-MM-DD) interpreted as
-UTC-3 Argentina timezone:
-  - from → 00:00:00.000000 Argentina time (beginning of day)
-  - to   → 23:59:59.999999 Argentina time (end of day)
+the business timezone (default America/Lima; configurable via COCINA_BUSINESS_TIMEZONE):
+  - from → 00:00:00.000000 local time (beginning of day)
+  - to   → 23:59:59.999999 local time (end of day)
 
 This conversion is done in this module so that callers (tests and production)
 always provide wall-clock dates as the dueño sees them on the calendar.
@@ -26,13 +26,15 @@ parameter via Query(..., alias="from").
 """
 
 import uuid
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from cocina_control.api.deps import require_role
+from cocina_control.config import get_settings
 from cocina_control.db import get_session
 from cocina_control.models.product import Product
 from cocina_control.models.user import User
@@ -42,17 +44,19 @@ from cocina_control.services.export import _VALID_TYPES, generate_csv
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
-_TZ_ARG = timezone(timedelta(hours=-3))
-
 
 def _range_to_utc(from_date: date, to_date: date) -> tuple[datetime, datetime]:
-    """Convert a from/to date pair (Argentina local) to UTC-aware datetimes.
+    """Convert a from/to date pair (business local time) to UTC-aware datetimes.
 
-    from_dt = from_date at 00:00:00.000000 UTC-3
-    to_dt   = to_date  at 23:59:59.999999 UTC-3
+    from_dt = from_date at 00:00:00.000000 in the business timezone
+    to_dt   = to_date  at 23:59:59.999999 in the business timezone
+
+    The business timezone is configured via COCINA_BUSINESS_TIMEZONE
+    (default America/Lima).
     """
-    from_dt = datetime.combine(from_date, time(0, 0, 0, 0), tzinfo=_TZ_ARG)
-    to_dt = datetime.combine(to_date, time(23, 59, 59, 999999), tzinfo=_TZ_ARG)
+    tz = ZoneInfo(get_settings().business_timezone)
+    from_dt = datetime.combine(from_date, time(0, 0, 0, 0), tzinfo=tz)
+    to_dt = datetime.combine(to_date, time(23, 59, 59, 999999), tzinfo=tz)
     return from_dt, to_dt
 
 
@@ -67,8 +71,8 @@ def _range_to_utc(from_date: date, to_date: date) -> tuple[datetime, datetime]:
     summary="Dashboard summary: stock, consumption, alerts, low stock (owner only)",
 )
 def get_summary(
-    from_date: date = Query(..., alias="from", description="Start date YYYY-MM-DD (Argentina)"),
-    to_date: date = Query(..., alias="to", description="End date YYYY-MM-DD (Argentina)"),
+    from_date: date = Query(..., alias="from", description="Start date YYYY-MM-DD (business tz)"),
+    to_date: date = Query(..., alias="to", description="End date YYYY-MM-DD (business tz)"),
     session: Session = Depends(get_session),
     current_user: User = Depends(require_role("owner")),
 ) -> DashboardSummaryResponse:
@@ -84,7 +88,8 @@ def get_summary(
     Also returns the list of products below their low_stock_threshold and a
     count of orders (completed vs photo-only) in the range.
 
-    Dates are interpreted as Argentina local time (UTC-3).
+    Dates are interpreted as the business timezone (default America/Lima;
+    configurable via COCINA_BUSINESS_TIMEZONE).
     """
     if from_date > to_date:
         raise HTTPException(
@@ -107,8 +112,8 @@ def get_summary(
 )
 def get_traceability(
     product_id: uuid.UUID,
-    from_date: date = Query(..., alias="from", description="Start date YYYY-MM-DD (Argentina)"),
-    to_date: date = Query(..., alias="to", description="End date YYYY-MM-DD (Argentina)"),
+    from_date: date = Query(..., alias="from", description="Start date YYYY-MM-DD (business tz)"),
+    to_date: date = Query(..., alias="to", description="End date YYYY-MM-DD (business tz)"),
     session: Session = Depends(get_session),
     current_user: User = Depends(require_role("owner")),
 ) -> list[TraceabilityEvent]:
@@ -147,8 +152,8 @@ def get_traceability(
     response_class=StreamingResponse,
 )
 def export_csv(
-    from_date: date = Query(..., alias="from", description="Start date YYYY-MM-DD (Argentina)"),
-    to_date: date = Query(..., alias="to", description="End date YYYY-MM-DD (Argentina)"),
+    from_date: date = Query(..., alias="from", description="Start date YYYY-MM-DD (business tz)"),
+    to_date: date = Query(..., alias="to", description="End date YYYY-MM-DD (business tz)"),
     type: str = Query("all", description="Filter: all | delivery | order | count"),
     session: Session = Depends(get_session),
     current_user: User = Depends(require_role("owner")),

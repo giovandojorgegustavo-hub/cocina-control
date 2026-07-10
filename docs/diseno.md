@@ -59,7 +59,7 @@ Qué significa en la práctica: es un caso que casi nunca debería pasar (un tur
 **Pregunta 5:**
 > ¿Cuál es la ventana en la que el operario puede corregir una entrega validada?
 
-**Respuesta:** El operario puede crear registros de corrección mientras tenga sesión activa ese mismo día calendario. Pasada la medianoche, solo el dueño puede generar correcciones. La ventana se controla comparando el `created_at` de la sesión activa con la fecha del día en UTC-3 (zona horaria de Argentina).
+**Respuesta:** El operario puede crear registros de corrección mientras tenga sesión activa ese mismo día calendario. Pasada la medianoche, solo el dueño puede generar correcciones. La ventana se controla comparando el `created_at` de la sesión activa con la fecha del día en la zona horaria del negocio (default `America/Lima`; configurable con `COCINA_BUSINESS_TIMEZONE`).
 
 Qué significa en la práctica: si Juan validó una entrega a las 14:00 y se dio cuenta del error a las 23:00 del mismo día, puede corregirlo solo. Si lo nota al día siguiente, tiene que pedirle al dueño que lo corrija.
 
@@ -112,7 +112,7 @@ Qué significa en la práctica: si el catálogo tiene 15 productos, el operario 
 **Pregunta 10:**
 > ¿Una vez terminado el conteo, cuánto tiempo puede el operario seguir corrigiendo?
 
-**Respuesta:** Igual que para las entregas: mientras la sesión esté activa ese mismo día calendario. Pasada la medianoche, solo el dueño puede generar correcciones. Toda corrección, dentro o fuera de esa ventana, es siempre un registro nuevo que apunta al original — nunca sobreescritura.
+**Respuesta:** Igual que para las entregas: mientras la sesión esté activa ese mismo día calendario en la zona horaria del negocio (default `America/Lima`; configurable con `COCINA_BUSINESS_TIMEZONE`). Pasada la medianoche local, solo el dueño puede generar correcciones. Toda corrección, dentro o fuera de esa ventana, es siempre un registro nuevo que apunta al original — nunca sobreescritura.
 
 Qué significa en la práctica: si Juan contó 4 paltas y termina el conteo, pero después se da cuenta que eran 6, puede corregirlo ese mismo día. El sistema guarda los dos registros: el original (4) y la corrección (6), con la referencia entre ellos.
 
@@ -580,7 +580,7 @@ Opcionalmente, un `Makefile` con un target `deploy` encapsula estos pasos para e
 
 **Conflicto de validación offline.** Cubierto en la Pregunta 4 — la primera validación gana, la segunda recibe un 409.
 
-**Zona horaria.** Todos los timestamps se guardan en UTC en la base de datos. La conversión a hora local (UTC-3, Argentina) se hace en el cliente o en la capa de presentación del tablero. Esto evita problemas con el cambio de horario de verano (Argentina no lo usa, pero la práctica es correcta).
+**Zona horaria del negocio.** Todos los timestamps se guardan en UTC en la base de datos (`TIMESTAMPTZ`). La zona horaria del negocio — `America/Lima` (UTC-5, sin DST) — se usa únicamente para interpretar fechas calendario: cortes de día en ventanas de corrección, fecha "de hoy" del tablero, y conversión de los parámetros `from/to` a rango UTC. Se configura vía `COCINA_BUSINESS_TIMEZONE` (default `America/Lima`). Cambiar la zona horaria para una relocalización o segunda cocina requiere solo ajustar la env var — sin migración ni cambio de código. El frontend recibe los timestamps en UTC y es responsable de formatearlos en hora local para el usuario.
 
 ### Decisiones diferidas
 

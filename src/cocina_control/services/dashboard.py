@@ -353,9 +353,9 @@ def compute_summary(
     """Compute the full dashboard summary for the given date range.
 
     from_dt and to_dt must be timezone-aware datetimes converted from the
-    user-supplied YYYY-MM-DD dates to the UTC-3 Argentina boundary:
-      - from_dt = date at 00:00:00 Argentina time
-      - to_dt   = date at 23:59:59.999999 Argentina time
+    user-supplied YYYY-MM-DD dates to the business timezone boundary:
+      - from_dt = date at 00:00:00 local time (business timezone, default America/Lima)
+      - to_dt   = date at 23:59:59.999999 local time
 
     Products:
       For each active product, compute:
