@@ -59,29 +59,14 @@ El dueño registra el costo de lo que compra. El **operario nunca ve plata** —
 - El costo del inventario y del consumo se calculan post-facto sobre los costos registrados por el dueño.
 - El operario ni ve el precio, ni lo tipea, ni lo escucha. No aparece en su tablet ni en ninguna pantalla que él pueda abrir.
 
-> **DECISIÓN DEL DUEÑO — momento del cargo del costo:**
-> ¿El costo se anota al **momento de comprar** (cuando el dueño hace la orden al proveedor, antes de que llegue nada) o al **momento de recibir** (cuando el operario valida cada partida y el dueño confirma después)?
->
-> Opciones:
-> - **Al comprar**: rápido, el dueño lo carga una vez con la orden. Riesgo: si el precio final de la factura difiere (por ajustes del proveedor), hay que reabrir la orden para corregir.
-> - **Al recibir**: refleja el precio real de cada partida (útil si el proveedor ajusta por peso o cambia precios entre tandas). Costo extra: el dueño tiene que entrar al sistema cada vez que llega una partida.
-> - **Mixto**: el dueño carga estimado al comprar y corrige al recibir si difiere. Más flexible, más pantallas.
+> **DECISIÓN RESUELTA (PR #95) — momento del cargo del costo: al comprar.**
+> El dueño carga el costo junto con la orden, factura en mano; el operario nunca toca plata. Si el precio final difiere, la corrección es un registro nuevo sobre la orden (append-only), no una reapertura destructiva.
 
-> **DECISIÓN DEL DUEÑO — granularidad del costo:**
-> Cuando el dueño escribe el costo de un ítem de la orden, ¿lo hace **por unidad** (por kg, por unidad, por litro) o **total por ítem** (los 100kg de pollo costaron 850 soles)?
->
-> Opciones:
-> - **Por unidad**: fácil de reutilizar entre órdenes; el sistema calcula el total. Rompe cuando el proveedor cobra por lote (descuentos por cantidad).
-> - **Total por ítem**: refleja la factura real; el sistema calcula el costo por unidad para reportes. Requiere que el dueño divida a mano si quiere reutilizar precios.
+> **DECISIÓN RESUELTA (PR #95) — granularidad del costo: por unidad.**
+> El dato base es el costo unitario; el sistema calcula y muestra el total (unidad × cantidad). Con partidas, cada tanda cuesta `cantidad × precio unitario` sin cuentas manuales, y los precios variables entre compras (pollo a 7, a 6, a 8) se registran sin fricción.
 
-> **DECISIÓN DEL DUEÑO — método de valuación del consumo:**
-> Cuando el mismo producto llegó a distinto costo (dos entregas de pollo con precios diferentes), ¿el consumo se valúa al costo de la **última partida** (LIFO), la **primera** (FIFO), o el **promedio ponderado** de lo que hay en stock?
->
-> Opciones:
-> - **FIFO** (primero en entrar, primero en salir): refleja la realidad culinaria (se usa lo más viejo primero). Requiere que el sistema recuerde el orden de las partidas.
-> - **Promedio ponderado**: promedia los costos de todo el stock. Simple de calcular. Bueno cuando los precios varían poco.
-> - **LIFO**: refleja el costo de reposición. Poco intuitivo para cocina.
-> - Marcá cuál preferís por default; el dueño puede cambiarlo por producto si hace falta.
+> **DECISIÓN RESUELTA (PR #95) — método de valuación del consumo: promedio ponderado.**
+> Los insumos se mezclan en la misma heladera — rastrear de qué tanda salió cada gramo (FIFO) es impráctico en una cocina. Las partidas aportan cantidades exactas y precios reales; el promedio ponderado aparece solo al valuar el consumo. Física exacta, plata promediada.
 
 ### B. Recepción por partidas
 
@@ -98,37 +83,17 @@ Una **orden de compra** al proveedor puede recibirse en varias **partidas** (tan
 
 **Lo que no cambia**: la validación de cada partida sigue siendo del operario, sigue siendo <5s por ítem, sigue siendo append-only (cada partida es un registro nuevo).
 
-> **DECISIÓN DEL DUEÑO — cierre automático o manual:**
-> ¿La orden se **cierra sola** cuando la suma de las partidas alcanza lo pedido, o la **cierra el dueño** manualmente aunque llegue todo?
->
-> Opciones:
-> - **Cierre automático**: menos fricción, no requiere acción del dueño. Cerró cuando el saldo por producto es 0.
-> - **Cierre manual del dueño**: el dueño confirma que la orden está cerrada. Útil si a veces se aceptan pequeñas variaciones o si hay una revisión de factura antes de dar por cerrado.
-> - **Cierre automático + posibilidad de reabrir**: cerró sola, pero el dueño puede reabrir si el proveedor manda algo más después.
+> **DECISIÓN RESUELTA (PR #95) — cierre de orden: automático al completarse, reabrible.**
+> La orden se cierra sola cuando el saldo por producto llega a 0. El dueño puede reabrirla si el proveedor manda algo más o si hubo un error. Cerrar y reabrir son eventos append-only.
 
-> **DECISIÓN DEL DUEÑO — quién registra la partida:**
-> ¿El **operario registra la partida** (como hoy con la verificación de entrada) o **solo el dueño** puede registrarla?
->
-> Opciones:
-> - **Operario**: mismo flujo que v0.2, se mantiene la velocidad y el operario no tiene que esperar al dueño. Consistente con "el operario anota lo que llegó".
-> - **Sólo dueño**: si el dueño quiere ser el único autorizado a ampliar el stock. Rompe el flujo actual y bloquea al operario cuando el dueño no está.
-> - **Operario registra, dueño valida después**: doble check, más fricción operativa.
+> **DECISIÓN RESUELTA (PR #95) — quién registra la partida: el operario.**
+> Es quien está en la cocina pesando lo que llega — mismo flujo que la verificación de v0.2, sin esperar al dueño. Un doble-check agregaría fricción contra la regla de los 5 segundos.
 
-> **DECISIÓN DEL DUEÑO — exceso de partida:**
-> Si una partida llega con **más de lo que faltaba** para completar la orden (llegó 45kg cuando faltaban 40), ¿qué hace el sistema?
->
-> Opciones:
-> - **Aceptar el exceso**: se registra la partida completa, el sobrante entra al stock como excedente sobre la orden. Refleja la realidad; puede complicar la trazabilidad contra la factura.
-> - **Rechazar el exceso**: solo se acepta hasta el máximo pendiente. El resto no queda registrado. Consistente con "la orden es lo que el dueño pidió" pero pierde stock real.
-> - **Aceptar como orden nueva**: el sobrante se registra como una orden separada sin pre-carga. El dueño le pone el costo después.
+> **DECISIÓN RESUELTA (PR #95) — exceso de partida: se acepta y se registra como discrepancia.**
+> La partida completa entra al stock (lo que llegó es real); el excedente sobre la orden queda marcado como discrepancia visible para el dueño en su tablero. No se bloquea la realidad — se la muestra.
 
-> **DECISIÓN DEL DUEÑO — cancelación de orden con partidas ya recibidas:**
-> ¿Se puede **anular una orden** que ya recibió una o más partidas? ¿Qué pasa con el stock que ya entró?
->
-> Opciones:
-> - **No se puede anular con partidas**: hay que cerrar y crear una orden nueva de "diferencia". Máxima trazabilidad.
-> - **Anular es una corrección**: las partidas ya recibidas quedan como registros, la orden pasa a estado **anulada** con motivo. El stock ya no se toca (impacto histórico).
-> - **Anular revierte el stock**: se descuentan las partidas del stock. Peligroso — puede dejar el stock negativo si ya se consumió algo.
+> **DECISIÓN RESUELTA (PR #95) — cancelación con partidas recibidas: anular es una corrección.**
+> Las partidas ya recibidas quedan como registros (impactaron stock real); la orden pasa a estado **anulada** con motivo. El stock no se revierte. Respeta append-only y auditoría.
 
 ## Alcance v0.4 — el detector de fugas
 
@@ -249,8 +214,7 @@ Los usuarios son también potenciales auditados. Toda corrección es un **regist
 - **Cámara del dispositivo:** la app necesita acceso a la cámara de la tablet/celular para las fotos de pedidos. Las fotos se suben asociadas al registro; si no hay conexión, quedan en cola local.
 - **Moneda del negocio:** todos los costos se registran en **soles peruanos (PEN)**. Un solo valor, sin conversión ni multi-moneda en v0.3.
 
-> **DECISIÓN DEL DUEÑO — precisión decimal de costos:**
-> ¿Cuántos decimales tiene un costo? Opciones típicas: 2 decimales (S/. 12.35) o 4 decimales (S/. 12.3456) para casos donde el costo por unidad viene de dividir un total por una cantidad grande y el redondeo importa. Por default, 2 decimales.
+> **DECISIÓN RESUELTA (PR #95) — precisión decimal de costos: 2 decimales** (S/. 12.35).
 
 ## Convenciones técnicas del negocio
 
@@ -294,11 +258,11 @@ Sirve para saber cuándo v0.4 está terminada. Incluye todo lo de v0.2 y v0.3 (q
 
 ### Nuevos en v0.3 — plata
 
-- [ ] El dueño puede registrar un costo por cada ítem de una orden de compra (momento y granularidad exacta a definir en las decisiones del dueño arriba).
+- [ ] El dueño puede registrar un costo unitario por cada ítem de una orden de compra al momento de comprar; el total se muestra calculado.
 - [ ] **El operario nunca ve un costo, un precio, ni un total en plata en ninguna pantalla** — verificable con tests de UI y de API.
 - [ ] El dueño ve en su tablero el **costo de inventario actual** (cuánta plata hay parada en depósito) y el **costo de consumo del período** (cuánta plata se consumió).
 - [ ] Cada costo registrado queda con quién y cuándo lo cargó; las correcciones son registros nuevos con puntero al original.
-- [ ] El tablero del dueño soporta cambiar el método de valuación del consumo (según decisión: FIFO / promedio ponderado / LIFO) y muestra el resultado consistente con ese método.
+- [ ] El costo de consumo y de inventario se valúan por promedio ponderado, y el resultado es consistente y reproducible a mano.
 
 ### Nuevos en v0.3 — partidas
 
@@ -306,8 +270,8 @@ Sirve para saber cuándo v0.4 está terminada. Incluye todo lo de v0.2 y v0.3 (q
 - [ ] Una orden de compra puede recibirse en **varias partidas**. Cada partida se valida con el mismo flujo del operario (bandeja → verificación → validar).
 - [ ] Al validar cada partida, **el stock se actualiza con lo que llegó en esa partida** — no espera al cierre de la orden.
 - [ ] La orden muestra saldo pendiente por producto entre partida y partida (ej: "faltan 40kg de pollo").
-- [ ] La orden pasa a estado **cerrada** según la política elegida (cierre automático al llegar todo o cierre manual del dueño, según decisión arriba).
-- [ ] Los excesos y las anulaciones se manejan según las decisiones del dueño de arriba — cada camino queda como registro append-only.
+- [ ] La orden pasa a estado **cerrada** automáticamente al llegar todo, y el dueño puede reabrirla; ambos son eventos append-only.
+- [ ] Los excesos quedan registrados como discrepancia visible al dueño; anular una orden conserva las partidas recibidas — cada camino queda como registro append-only.
 - [ ] El tablero del dueño lista las órdenes con partidas parciales y muestra cuánto falta.
 
 ### Nuevos en v0.4 — catálogo y recetas
@@ -328,8 +292,9 @@ Sirve para saber cuándo v0.4 está terminada. Incluye todo lo de v0.2 y v0.3 (q
 
 ## Próximos pasos
 
-1. ~~El dueño contesta las decisiones nuevas de v0.4~~ — **hecho**: las 4 fueron respondidas en el PR #96 y están incorporadas arriba como `DECISIÓN RESUELTA`.
-2. Carga inicial del catálogo desde la planilla real: productos con su unidad natural, factores de conversión, equivalencias de preparados, y las recetas de los 5 platos.
-3. UX diseña las pantallas del dueño: catálogo, editor de recetas/equivalencias, tablero de discrepancias. **Cero pantallas nuevas de operario** — criterio de diseño, no casualidad.
-4. Backend define el modelo append-only para recetas versionadas, factores y equivalencias, y el cálculo de reconciliación como job de minería posterior.
-5. Verificación end-to-end: el operario no ve plata ni recetas ni discrepancias en ninguna ruta; una reconciliación de ejemplo se reproduce a mano y cuadra con la del sistema.
+1. ~~El dueño revisa y contesta las decisiones~~ — **hecho**: las 8 de v0.3 (PR #95) y las 4 de v0.4 (PR #96) están incorporadas arriba como `DECISIÓN RESUELTA`.
+2. **Construcción de v0.3 primero**: UX actualiza wireframes (orden de compra con costos, bandeja con órdenes abiertas y partidas parciales, tablero con plata); backend define el modelo append-only para orden de compra, partida y costo (migración incremental sobre v0.2); frontend implementa manteniendo el flujo de <5s del operario. Verificación: el operario no ve plata en ninguna ruta ni widget — test automatizado obligatorio.
+3. **Después, v0.4 — carga inicial del catálogo** desde la planilla real: productos con su unidad natural, factores de conversión estimados, equivalencias de preparados, y las recetas de los 5 platos.
+4. UX diseña las pantallas del dueño de v0.4: catálogo, editor de recetas/equivalencias, tablero de discrepancias. **Cero pantallas nuevas de operario** — criterio de diseño, no casualidad.
+5. Backend define el modelo append-only para recetas versionadas, factores y equivalencias, y el cálculo de reconciliación como job de minería posterior.
+6. Verificación end-to-end de v0.4: el operario no ve recetas ni discrepancias en ninguna ruta; una reconciliación de ejemplo se reproduce a mano y cuadra con la del sistema.
