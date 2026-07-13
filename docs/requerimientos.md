@@ -160,12 +160,8 @@ Cada producto se registra y se cuenta SIEMPRE en su **unidad natural** — la mi
 - Los productos que participan en recetas por peso declaran un **factor de conversión a gramos** (1 lechuga ≈ X g). Lo define el dueño, es editable, y cada cambio es un registro nuevo que rige **hacia adelante** — los teóricos ya calculados no cambian retroactivamente.
 - Los **5 platos del negocio** (Bacon Fit, BBQ, bonabowl, andes, influencer) son productos del catálogo, tipo "plato". El operario ya los usa al completar pedidos desde v0.2 — su flujo no cambia en nada.
 
-> **DECISIÓN DEL DUEÑO — calibración de factores de conversión:**
-> ¿El factor "1 lechuga ≈ X gramos" sale de **pesadas reales** (pesar 5 lechugas al armar el catálogo y promediar) o de un **estimado del dueño** que se ajusta con el tiempo?
->
-> Opciones:
-> - **Pesada real inicial**: una tarde de trabajo con la balanza al configurar el catálogo. Factores confiables desde el día uno; la reconciliación arranca fina.
-> - **Estimado ajustable**: arranca ya, con números gruesos. Las primeras reconciliaciones van a mostrar discrepancias que son error de factor, no fuga — hay que saber leerlas así.
+> **DECISIÓN RESUELTA (PR #96) — calibración de factores de conversión: estimado ajustable.**
+> Se arranca ya, con números gruesos del dueño. Consecuencia asumida: las primeras reconciliaciones mostrarán discrepancias que son error de factor, no fuga — el tablero y el onboarding deben comunicarlo (si un producto "fuga" siempre el mismo %, el factor está mal calibrado; se ajusta y recién después el rojo significa fuga).
 
 ### D. Recetas estimadas por plato
 
@@ -176,19 +172,11 @@ La receta es la traducción de un plato vendido a insumos crudos consumidos. Es 
 - Las define y edita **solo el dueño**. Cada cambio es una versión nueva append-only que rige hacia adelante: el teórico de períodos pasados se calculó con la receta vigente entonces y no se recalcula.
 - **El operario jamás ve una receta.** Ni al completar pedidos, ni en ninguna pantalla de su rol.
 
-> **DECISIÓN DEL DUEÑO — packing dentro de la receta:**
-> ¿La receta del plato incluye el packing (1 bowl 1300 ml, 1 tapa, 1 tenedor, 1 cuchillo, 1 bolsa, ajiceros) además de la comida?
->
-> Opciones:
-> - **Sí (recomendado)**: el teórico cubre también los descartables — y ahí también hay fuga (los 187 tenedores del conteo confirman que es stock relevante). Costo: mantener 5-6 líneas más por receta.
-> - **No**: packing solo por conteo, sin teórico. Más simple, pero un faltante de 50 bowls descartables no dispara ninguna alarma.
+> **DECISIÓN RESUELTA (PR #96) — packing dentro de la receta: sí.**
+> La receta del plato incluye el packing (1 bowl 1300 ml, 1 tapa, 1 tenedor, 1 cuchillo, 1 bolsa, ajiceros según plato). El teórico cubre también los descartables — ahí también hay fuga.
 
-> **DECISIÓN DEL DUEÑO — merma esperada:**
-> Pelar palta deja cáscara y pepa; el pollo pierde líquido al descongelar. ¿La merma normal va **adentro del estimado de la receta** (la receta dice "120 g de palta" ya contando la cáscara) o como **% de merma por insumo** separado?
->
-> Opciones:
-> - **Adentro de la receta (recomendado para v0.4)**: un solo número por ingrediente. La receta estima consumo de compra, no de plato servido.
-> - **% separado por insumo**: más fino (permite distinguir "fuga" de "la merma creció"), pero es otro parámetro por producto a mantener.
+> **DECISIÓN RESUELTA (PR #96) — merma esperada: adentro del estimado de la receta.**
+> Un solo número por ingrediente: la receta dice "120 g de palta" ya contando cáscara y pepa. La receta estima consumo de compra, no de plato servido.
 
 ### E. Preparados: equivalencia, no fabricación
 
@@ -221,13 +209,8 @@ discrepancia   =  stock teórico − conteo actual
 - **El operario no ve nada de esto.** Sigue contando a ciegas — el principio #1 es exactamente lo que hace confiable al conteo que alimenta este cálculo.
 - Toda discrepancia es reconstruible: el dueño puede abrir un producto y ver los eventos que componen el teórico (conteo anterior, cada partida, cada pedido cuya receta usa ese insumo).
 
-> **DECISIÓN DEL DUEÑO — umbral de tolerancia:**
-> Ninguna cocina cuadra a cero. ¿A partir de qué discrepancia un producto se marca en rojo en el tablero?
->
-> Opciones:
-> - **% por producto con default global (recomendado)**: un default (ej: 5%) y override por producto — el culantro merma distinto que los tenedores.
-> - **Valor absoluto en soles**: marca lo que duele en plata, ignora porcentajes de productos baratos.
-> - **Ambos**: rojo si supera % y soles a la vez. Más fino, dos parámetros.
+> **DECISIÓN RESUELTA (PR #96) — umbral de tolerancia: 5% de default global, ajustable por producto.**
+> Ninguna cocina cuadra a cero: el umbral separa ruido normal (balanza, factores estimados) de "acá hay algo". El dueño puede ajustar el % por producto — el culantro merma distinto que los tenedores.
 
 ## Principios de diseño (no negociables)
 
@@ -345,7 +328,7 @@ Sirve para saber cuándo v0.4 está terminada. Incluye todo lo de v0.2 y v0.3 (q
 
 ## Próximos pasos
 
-1. El dueño contesta cada `> DECISIÓN DEL DUEÑO:` nueva de v0.4 (calibración de factores, packing en receta, merma, umbral) en el PR de este documento.
+1. ~~El dueño contesta las decisiones nuevas de v0.4~~ — **hecho**: las 4 fueron respondidas en el PR #96 y están incorporadas arriba como `DECISIÓN RESUELTA`.
 2. Carga inicial del catálogo desde la planilla real: productos con su unidad natural, factores de conversión, equivalencias de preparados, y las recetas de los 5 platos.
 3. UX diseña las pantallas del dueño: catálogo, editor de recetas/equivalencias, tablero de discrepancias. **Cero pantallas nuevas de operario** — criterio de diseño, no casualidad.
 4. Backend define el modelo append-only para recetas versionadas, factores y equivalencias, y el cálculo de reconciliación como job de minería posterior.
