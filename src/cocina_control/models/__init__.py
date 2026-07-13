@@ -4,6 +4,12 @@ from cocina_control.models.delivery import Delivery, DeliveryItem
 from cocina_control.models.delivery_order import DeliveryOrder, DeliveryOrderItem
 from cocina_control.models.inventory import InventoryCount, InventoryCountItem
 from cocina_control.models.product import Product
+from cocina_control.models.purchase_order import (
+    PurchaseOrder,
+    PurchaseOrderItem,
+    PurchaseOrderItemCost,
+    PurchaseOrderStatusEvent,
+)
 from cocina_control.models.user import User
 
 __all__ = [
@@ -14,5 +20,9 @@ __all__ = [
     "InventoryCount",
     "InventoryCountItem",
     "Product",
+    "PurchaseOrder",
+    "PurchaseOrderItem",
+    "PurchaseOrderItemCost",
+    "PurchaseOrderStatusEvent",
     "User",
 ]

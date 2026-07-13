@@ -28,6 +28,10 @@ EXPECTED_TABLES = {
     "delivery_order_items",
     "inventory_counts",
     "inventory_count_items",
+    "purchase_orders",
+    "purchase_order_items",
+    "purchase_order_item_costs",
+    "purchase_order_status_events",
 }
 
 
