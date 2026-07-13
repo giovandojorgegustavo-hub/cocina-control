@@ -1,10 +1,18 @@
-# Tablero del dueño (v0.2)
+# Tablero del dueño (v0.3 — con costos y órdenes de compra)
+
+> **Qué cambió respecto de v0.2:**
+> - Se suman tres widgets nuevos: **Costo de inventario**, **Costo de consumo del período** y **Órdenes de compra abiertas**.
+> - La tabla de consumo y stock gana una columna **Costo consumo** (valuado a promedio ponderado).
+> - La vista de trazabilidad por producto suma los eventos de tipo **PARTIDA** y **ORDEN** (además de los ya existentes).
+> - Nueva sección al final: cómo el dueño arranca una orden nueva desde el tablero.
+
+---
 
 ## Objetivo del flujo
 
-Que el dueño, de un solo vistazo, vea el estado del inventario: consumo por diferencia del último período, stock actual y productos por acabarse. Cero acciones necesarias — sólo lectura. Es la contracara de las pantallas del operario: acá SÍ hay totales, promedios, comparativas y consumos.
+Que el dueño, de un solo vistazo, vea el estado del inventario: consumo por diferencia del último período, stock actual, productos por acabarse, **cuánta plata hay parada en depósito**, **cuánta plata se consumió en el período** y **qué órdenes de compra están pendientes de recibir**. Cero acciones necesarias — solo lectura. Salvo el botón de nueva orden, que está disponible desde el widget correspondiente.
 
-Alineado con el principio rector de v0.2: la captura (entregas verificadas, fotos de pedidos, conteos) optimiza fidelidad; este tablero es la minería posterior sobre esos datos crudos.
+Alineado con el principio rector: la captura optimiza fidelidad; este tablero es la minería posterior sobre esos datos crudos. Los costos que se muestran acá los cargó el dueño al crear las órdenes de compra.
 
 ## Usuario
 
@@ -12,22 +20,37 @@ Dueño de la cocina. Mira desde el escritorio, en pausa entre tareas. Prioriza v
 
 ## Presupuesto
 
-No aplica el techo de 3 toques / 5 segundos — no es un flujo de captura. La meta acá es distinta:
+No aplica el techo de 3 toques / 5 segundos — no es un flujo de captura. La meta:
 
 - **Vista principal legible en menos de 3 segundos.**
 - **Producto por acabarse identificable de un vistazo (visual, no textual).**
+- **Costo de inventario y costo de consumo legibles sin calcular nada.**
 
 ## Acceso
 
-- Sólo el dueño ve este tablero. Login separado del operario o rol distinto en el mismo login.
+- Solo el dueño ve este tablero. Login separado del operario o rol distinto en el mismo login.
 - El operario nunca ve este tablero. Ni siquiera un link o preview.
-- Desde acá el dueño también **pre-carga las entregas** (ver registro-entrada.md) y **pide conteos de inventario** (ver registro-inventario.md). Esas pantallas de administración se especifican aparte cuando se diseñe el panel del dueño; este documento cubre la vista de lectura.
+- Desde acá el dueño también **arranca órdenes de compra** (ver sección al final y `orden-compra.md`) y **pide conteos de inventario** (ver `registro-inventario.md`).
 
-> PREGUNTA A BACKEND: ¿existe el concepto de rol (operario vs dueño) en el modelo de usuarios de v0.2, o hay una app distinta por rol? Asumo: mismo login, distinto rol. El rol "operario" nunca puede acceder a la ruta del tablero.
+> PREGUNTA A BACKEND: ¿existe el concepto de rol (operario vs dueño) en el modelo de usuarios, o hay una app distinta por rol? Asumo: mismo login, distinto rol. El rol "operario" nunca puede acceder a la ruta del tablero ni a ninguna ruta que exponga costos.
+
+---
+
+## Nota sobre promedio ponderado (PMP)
+
+El **promedio ponderado** (PMP) es el método de valuación de inventario elegido (decisión resuelta, PR #95). Significa que el costo de cada unidad en stock no es el costo de la última compra ni de la primera, sino un promedio ponderado por cantidad de todas las compras activas:
+
+> PMP = (suma de cantidad × costo unitario de cada partida recibida) ÷ (suma de cantidades recibidas)
+
+Ejemplo: llegaron 30 kg de pollo a S/. 7,00 y después 40 kg a S/. 8,00. El PMP es (30×7 + 40×8) ÷ 70 = S/. 7,57/kg. El costo de consumo y el costo de inventario se calculan a ese valor.
+
+Esta nota aparece una vez en este documento, como referencia. No se muestra en pantalla al dueño — se asume que lo entiende o que el onboarding se lo explica.
+
+---
 
 ## Vista principal
 
-Pensada para pantalla grande (desktop 1440+) o tablet horizontal. En celular vertical se apila y el widget de "por acabarse" queda arriba de todo.
+Pensada para pantalla grande (desktop 1440+) o tablet horizontal. En celular vertical se apila y los widgets de alerta quedan arriba de todo.
 
 Desktop / tablet horizontal:
 
@@ -48,100 +71,143 @@ Desktop / tablet horizontal:
 |  |  [ ver todos ]                |  |                                   |    |
 |  +-------------------------------+  +-----------------------------------+    |
 |                                                                              |
+|  +-------------------------------+  +-----------------------------------+    |
+|  |  COSTO DE INVENTARIO          |  |  COSTO DE CONSUMO DEL PERÍODO    |    |
+|  |                               |  |                                   |    |
+|  |  S/. 2.340,80                 |  |  S/. 1.120,50                    |    |
+|  |  plata parada en depósito     |  |  valuado a PMP · 7 días          |    |
+|  |  valuado a PMP                |  |                                   |    |
+|  |                               |  |  [ ver detalle por producto ]    |    |
+|  +-------------------------------+  +-----------------------------------+    |
+|                                                                              |
+|  +------------------------------------------+                               |
+|  |  ORDENES DE COMPRA ABIERTAS              |                               |
+|  |                                          |                               |
+|  |  Abiertas            3                   |                               |
+|  |  Recibidas parcial   1                   |                               |
+|  |  Total pendiente     S/. 1.240,00        |                               |
+|  |                                          |                               |
+|  |  [ ver todas las órdenes ]  [ + nueva ]  |                               |
+|  +------------------------------------------+                               |
+|                                                                              |
 |  CONSUMO Y STOCK POR PRODUCTO                                                |
 |  +------------------------------------------------------------------------+  |
-|  | Producto  | Stock ahora | Entradas | Consumo (diff) | Alerta         |  |
-|  |-----------|-------------|----------|----------------|----------------|  |
-|  | PALTA     |     4 un    |   20 un  |    18 un       |  ●● por acabar |  |
-|  | POLLO     |    12 kg    |   30 kg  |    22 kg       |                |  |
-|  | TOMATE    |     8 kg    |   15 kg  |    12 kg       |                |  |
-|  | CEBOLLA   |     3 kg    |   10 kg  |     9 kg       |                |  |
-|  | QUESO     |   0,5 kg    |    5 kg  |     6 kg  ⚠   |  ●   por acabar |  |
+|  | Producto  | Stock ahora | Entradas | Consumo (diff) | Costo consumo  | Alerta |  |
+|  |-----------|-------------|----------|----------------|----------------|--------|  |
+|  | PALTA     |     4 un    |   20 un  |    18 un       |  S/. 21,60     | ●● x acabar |  |
+|  | POLLO     |    12 kg    |   70 kg  |    58 kg       |  S/. 438,86    |             |  |
+|  | TOMATE    |     8 kg    |   15 kg  |    12 kg       |  S/. 42,00     |             |  |
+|  | CEBOLLA   |     3 kg    |   10 kg  |     9 kg       |  S/. 18,00     |             |  |
+|  | QUESO     |   0,5 kg    |    5 kg  |     6 kg ⚠     |  S/. 54,00     | ● x acabar  |  |
 |  +------------------------------------------------------------------------+  |
 |                                                                              |
 |  [ descargar CSV ]                       [ ver trazabilidad por producto ]   |
 +------------------------------------------------------------------------------+
 ```
 
-### Widget "por acabarse" (arriba a la izquierda)
+### Widget "por acabarse" (arriba a la izquierda) — sin cambios de v0.2
 
 - Lista corta, máximo 5 productos.
-- Semáforo visual por producto: círculos llenos/vacíos ● ○ ○ indicando nivel relativo al umbral. Verde = ok, amarillo = advertencia, rojo = crítico.
+- Semáforo visual por producto: círculos llenos/vacíos ● ○ ○ indicando nivel relativo al umbral.
 - El valor numérico (stock) al lado, secundario visualmente. Lo importante es el color.
 - "Ver todos" abre la tabla completa filtrada por productos bajo umbral.
 
 > PREGUNTA A BACKEND: ¿el umbral "por acabarse" es fijo por producto (definido por el dueño en el catálogo), calculado por consumo promedio, o híbrido? Asumo por ahora: fijo, cargado por el dueño en el catálogo. Si no está cargado, no aparece en "por acabarse" pero sí en la tabla.
 
-### Widget "pedidos en el período" (arriba a la derecha)
+### Widget "pedidos en el período" (arriba a la derecha) — sin cambios de v0.2
 
-- Conteo de pedidos por **estado**: terminados (con detalle de productos) y solo-foto (pendientes sin completar). Total abajo.
-- Un número alto de "solo foto" persistente es señal para el dueño de que el detalle no se está completando — y su análisis de salidas pierde granularidad.
-- No abre detalle en v0.2 — es sólo lectura rápida.
+- Conteo de pedidos por estado: terminados y solo-foto. Total abajo.
+- Un número alto de "solo foto" persistente es señal para el dueño de que el detalle no se está completando.
+- No abre detalle en v0.3 — es solo lectura rápida.
 
-> PREGUNTA A BACKEND (y al dueño): v0.2 no captura la plataforma (Rappi / PedidosYa) en el flujo del operario. ¿El dueño necesita el desglose por plataforma antes de que lleguen las integraciones por API? Si sí, se agrega como toque opcional en "completar pedido".
+> PREGUNTA A BACKEND (y al dueño): v0.2 no captura la plataforma (Rappi / PedidosYa) en el flujo del operario. ¿El dueño necesita el desglose por plataforma antes de que lleguen las integraciones por API?
 
-### Tabla "consumo y stock por producto" (abajo)
+### Widget "Costo de inventario" (nuevo en v0.3)
+
+- **Un número grande:** total en soles de lo que hay en stock ahora, valuado a PMP.
+- Etiqueta secundaria: "plata parada en depósito · valuado a PMP".
+- No depende del período seleccionado en la barra — siempre es "ahora".
+- No tiene botón de detalle en v0.3 (ese nivel de drill-down queda para v0.4 o cuando lo pida el dueño).
+
+> PREGUNTA A BACKEND: el costo de inventario se calcula como suma de (stock actual por producto × PMP de ese producto). ¿El PMP se calcula sobre todas las partidas históricas o solo las del período seleccionado? Asumo: histórico — el PMP es acumulado desde la primera compra registrada. El período no afecta el PMP, solo la ventana de consumo.
+
+### Widget "Costo de consumo del período" (nuevo en v0.3)
+
+- **Un número grande:** total en soles del consumo del período seleccionado, valuado a PMP.
+- Etiqueta secundaria: "valuado a PMP · [etiqueta del período seleccionado]".
+- Cambia cuando el dueño cambia el período en la barra.
+- "Ver detalle por producto" abre la tabla filtrada con el consumo y costo por producto para el período.
+
+> PREGUNTA A BACKEND: el costo de consumo del período se calcula como suma de (consumo por diferencia de cada producto × PMP de ese producto). ¿Es correcto? Asumo: sí. El consumo por diferencia ya existe en v0.2; el PMP viene de las órdenes registradas en v0.3.
+
+> PREGUNTA A BACKEND: ¿qué pasa si un producto tiene consumo registrado pero no tiene ningún costo cargado (sin órdenes de compra con ese producto)? Asumo: se muestra el consumo en cantidad pero la columna "Costo consumo" queda vacía con etiqueta "sin costo cargado" para ese producto. El total del widget excluye ese producto.
+
+### Widget "Órdenes de compra abiertas" (nuevo en v0.3)
+
+- Conteo de órdenes por estado activo: abiertas (sin ninguna partida) y recibidas parcialmente.
+- Total pendiente en soles: suma de saldos pendientes de todas las órdenes abiertas y recibidas parcialmente.
+- **"ver todas las órdenes"** abre el panel completo de órdenes (pantalla 2 de `orden-compra.md`).
+- **"+ nueva"** abre el formulario de nueva orden (pantalla 1 de `orden-compra.md`).
+
+### Tabla "consumo y stock por producto" (v0.3 — con columna nueva)
 
 Una fila por producto activo del catálogo. Columnas:
 
 - **Producto** — nombre en mayúsculas.
-- **Stock ahora** — último inventario registrado, ajustado por entregas validadas posteriores.
-- **Entradas** — suma de lo recibido en entregas **validadas** en el rango elegido (el valor recibido, no el anunciado).
-- **Consumo (diff)** — cálculo: `stock inicial + entradas − stock actual`. Es el consumo por diferencia que exige el requerimiento.
-- **Alerta** — semáforo visual si el consumo tiene diferencias anómalas o si el stock está bajo el umbral.
+- **Stock ahora** — último inventario registrado, ajustado por partidas validadas posteriores.
+- **Entradas** — suma de lo recibido en partidas **validadas** en el rango elegido (el valor recibido en la partida, no lo pedido en la orden).
+- **Consumo (diff)** — cálculo: `stock inicial + entradas − stock actual`. Consumo por diferencia, igual que v0.2.
+- **Costo consumo** *(nuevo)* — `consumo por diferencia × PMP del producto`. Valuado a promedio ponderado. Si no hay costo cargado para el producto, celda vacía con "—".
+- **Alerta** — semáforo visual.
 
-Ordenada por defecto por "alerta" descendente (primero los que tienen algo raro), después por consumo descendente.
+Ordenada por defecto por "alerta" descendente, después por consumo descendente.
 
-> PREGUNTA A BACKEND: la fórmula de consumo por diferencia necesita un "stock de inicio del período". ¿Se toma el último inventario anterior al inicio del rango, o el primero dentro del rango? Asumo: último inventario anterior. Si no existe, se muestra "sin dato de inicio" en esa fila y el consumo queda vacío.
+> PREGUNTA A BACKEND: la fórmula de consumo por diferencia necesita un "stock de inicio del período". ¿Se toma el último inventario anterior al inicio del rango, o el primero dentro del rango? Asumo: último inventario anterior. Si no existe, se muestra "sin dato de inicio" en esa fila.
 
-> PREGUNTA A BACKEND: ¿qué dispara el ícono de advertencia "⚠" en la columna de consumo? En v0.2 asumo sólo casos matemáticamente imposibles (consumo negativo, stock actual mayor que stock inicial + entradas). Alertas por desviación quedan para cuando haya recetas. Los productos marcados en pedidos terminados habilitan, a futuro, cruzar salidas declaradas contra consumo por diferencia — es minería posterior, no entra en v0.2.
+> PREGUNTA A BACKEND: ¿qué dispara el ícono de advertencia "⚠" en la columna de consumo? En v0.2 y v0.3 asumo solo casos matemáticamente imposibles (consumo negativo, stock actual mayor que stock inicial + entradas). Alertas por desviación quedan para cuando haya recetas (v0.4).
 
-### Selector de período (arriba)
+---
 
-- HOY: desde el último inventario hasta ahora.
-- 7 días: últimos 7 días completos.
-- 30 días: últimos 30 días completos.
-- Personalizado: date pickers de inicio y fin.
+## Vista de trazabilidad por producto (actualizada)
 
-Cambio de período recarga la vista completa.
-
-## Vista de trazabilidad por producto
-
-Se abre desde el link inferior "ver trazabilidad por producto" o desde tocar una fila de la tabla.
+Se abre desde "ver trazabilidad por producto" o desde tocar una fila de la tabla. Ahora incluye eventos de tipo PARTIDA y ORDEN.
 
 ```
 +------------------------------------------------------------------------------+
-|  <  Trazabilidad — PALTA                                                     |
+|  <  Trazabilidad — POLLO                                                     |
 +------------------------------------------------------------------------------+
 |                                                                              |
 |  [ HOY ] [ 7 días ] [ 30 días ] [ personalizado ]                            |
 |                                                                              |
-|  Stock ahora: 4 un.                                                          |
-|  Consumo del período: 18 un.                                                 |
+|  Stock ahora: 12 kg                                                          |
+|  Consumo del período: 58 kg                                                  |
+|  Costo consumo (PMP): S/. 438,86                                              |
 |                                                                              |
 |  EVENTOS                                                                     |
 |  +------------------------------------------------------------------------+  |
-|  | Fecha          Tipo        Cantidad   Operario   Nota                  |  |
+|  | Fecha          Tipo         Cantidad    Operario    Nota               |  |
 |  |------------------------------------------------------------------------|  |
-|  | Ayer 22:30    INVENTARIO    4 un      Juan                             |  |
-|  | Ayer 20:42    PEDIDO        2 un      Juan       salida — pedido term. |  |
-|  | Ayer 14:35    ENTREGA      15 un      Juan       corrige el de 14:32   |  |
-|  | Ayer 14:32    ENTREGA      12 un      Juan       corregido → 15 un     |  |
-|  | Ayer 09:00    INVENTARIO   10 un      María                            |  |
+|  | Ayer 22:30    INVENTARIO    12 kg       Juan                           |  |
+|  | Ayer 20:42    PEDIDO         2 un       Juan        salida — terminado  |  |
+|  | Ayer 14:35    PARTIDA #3    30 kg       María       Orden Carn. Lopez  |  |
+|  | 11 jul 14:05  PARTIDA #2    30 kg       Juan        Orden Carn. Lopez  |  |
+|  | 10 jul 16:30  ORDEN          100 kg     Dueño       Carn. Lopez abierta |  |
+|  | 10 jul 09:00  INVENTARIO    14 kg       María                          |  |
 |  +------------------------------------------------------------------------+  |
 |                                                                              |
 |  [ descargar CSV ]                                                           |
 +------------------------------------------------------------------------------+
 ```
 
-- Todos los eventos que tocaron ese producto en el rango, más nuevos arriba. Tipos en v0.2: **ENTREGA** (validada, con anunciado vs recibido), **PEDIDO** (productos declarados al completar), **INVENTARIO** (conteos).
-- Las correcciones se ven como pares: el registro corregido con etiqueta y el nuevo mostrando el link.
-- Las filas PEDIDO son salidas declaradas — informativas; el consumo oficial sigue siendo por diferencia.
-- Cumple el criterio de aceptación "el dueño puede reconstruir la trazabilidad completa de cualquier producto".
+- Tipos de evento en v0.3: **ORDEN** (pre-carga del dueño), **PARTIDA** (validada por el operario), **PEDIDO** (salida), **INVENTARIO** (conteo).
+- Las correcciones se ven como pares: registro corregido con etiqueta y el nuevo con link.
+- Las filas de PARTIDA no muestran costo — el costo está en la ORDEN y en la trazabilidad de costos, que es un nivel más.
+
+---
 
 ## Celular vertical
 
-El dueño puede mirar desde el celular. Layout apilado, mismos widgets en orden:
+Layout apilado, mismos widgets en orden:
 
 ```
 +----------------------+
@@ -160,16 +226,33 @@ El dueño puede mirar desde el celular. Layout apilado, mismos widgets en orden:
 | Solo foto     5      |
 | Total        43      |
 +----------------------+
+| COSTO INVENTARIO     |
+| S/. 2.340,80         |
+| plata en depósito    |
++----------------------+
+| COSTO CONSUMO        |
+| S/. 1.120,50         |
+| valuado PMP · 7d     |
++----------------------+
+| ORDENES ABIERTAS     |
+| Abiertas        3    |
+| Recib. parcial  1    |
+| Pendiente S/.1.240   |
+| [ver] [+ nueva]      |
++----------------------+
 | PRODUCTOS            |
 | PALTA                |
 |  stock 4 un          |
 |  entradas 20 un      |
 |  consumo 18 un       |
+|  costo S/. 21,60     |
 |  ●● por acabar       |
 +----------------------+
 ```
 
 En celular, la tabla se convierte en tarjetas apiladas. Se scrollea todo verticalmente.
+
+---
 
 ## Estados
 
@@ -183,9 +266,11 @@ En celular, la tabla se convierte en tarjetas apiladas. Se scrollea todo vertica
 +------------------------------------------------------------------------------+
 ```
 
+Los widgets de costo muestran "S/. 0,00" o "—" si no hay órdenes con costo cargado todavía.
+
 ### Cargando
 
-Skeletons grises de los tres widgets con la misma forma. Nunca spinner solo.
+Skeletons grises de todos los widgets con la misma forma. Nunca spinner solo.
 
 ### Error (al cargar datos)
 
@@ -195,25 +280,44 @@ Banner rojo arriba, no bloqueante, con "[ reintentar ]". Los widgets se pintan c
 
 Banner naranja: "Sin conexión — mostrando datos guardados (última sync: hace 12 min)". El tablero muestra el último snapshot cacheado. No bloquea la lectura.
 
-## Qué SÍ se muestra (a diferencia de operario)
+---
 
-- Consumo por diferencia.
+## Qué SÍ se muestra (diferencia con el operario)
+
+- Consumo por diferencia en cantidad.
 - Stock actual.
 - Productos por acabarse (semáforo visual).
-- Pedidos del período por estado (terminados / solo foto).
-- Trazabilidad completa de cualquier producto, fotos de pedidos incluidas.
+- Pedidos del período por estado.
+- **Costo de inventario (nuevo):** plata parada en depósito, valuada a PMP.
+- **Costo de consumo del período (nuevo):** plata consumida en el rango, valuada a PMP.
+- **Órdenes de compra abiertas (nuevo):** cuántas, cuánto falta, acceso a nueva orden.
+- Trazabilidad completa de cualquier producto, incluidos eventos PARTIDA y ORDEN.
 - Alertas por inconsistencias en los datos.
+- Costo de consumo por producto en la tabla.
 
-## Qué NO se muestra en v0.2
+## Qué NO se muestra en v0.3
 
-- Consumo esperado por receta (fuera de alcance, hay que definir recetas).
-- Detección automática de fugas (fuera de alcance, viene con recetas).
+- Consumo esperado por receta (fuera de alcance — viene con v0.4).
+- Detección automática de fugas (fuera de alcance — viene con recetas).
 - Desglose de pedidos por plataforma (v0.2 no lo captura — ver pregunta arriba).
-- Costos, márgenes, ingresos (no está en requerimientos).
-- Comparativas entre operarios (posible más adelante, no está pedido).
+- Comparativas entre operarios.
+- Costo por partida individual (el costo va en la orden; la trazabilidad muestra la PARTIDA como cantidad, no como plata).
+
+---
 
 ## Export
 
-Botón "descargar CSV" en la vista principal y en la trazabilidad. Descarga los datos del rango y vista actual. Es la salida cruda si el dueño quiere procesar en Excel.
+Botón "descargar CSV" en la vista principal y en la trazabilidad. Descarga los datos del rango y vista actual. En v0.3 el CSV incluye las columnas de costo consumo y el PMP de cada producto.
 
-> PREGUNTA A BACKEND: ¿el CSV debe respetar el modelo append-only mostrando correcciones como filas separadas con referencia al original, o entregar el "estado final" reconciliado? Asumo por auditoría: append-only, todas las filas, con columna de "corrige a" cuando aplique. Para entregas, incluye columnas de anunciado y recibido.
+> PREGUNTA A BACKEND: ¿el CSV debe respetar el modelo append-only mostrando correcciones como filas separadas con referencia al original, o entregar el "estado final" reconciliado? Asumo por auditoría: append-only, todas las filas, con columna de "corrige a" cuando aplique.
+
+---
+
+## Cómo el dueño arranca una orden nueva
+
+Desde el tablero hay dos accesos directos al flujo de orden de compra:
+
+1. **Botón "+ nueva"** en el widget "Órdenes de compra abiertas" — abre directamente el formulario de nueva orden.
+2. **"ver todas las órdenes"** en el mismo widget — abre la lista completa de órdenes, con el botón "+ nueva" arriba a la derecha.
+
+El flujo completo de creación, seguimiento, partidas recibidas, reapertura, anulación y corrección de costos está especificado en `docs/ux/orden-compra.md`.
