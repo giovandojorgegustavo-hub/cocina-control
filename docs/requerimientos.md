@@ -18,7 +18,7 @@ v0.2 asumía dos cosas que la operación real desmintió:
 
 ### Cambios respecto de v0.3
 
-Las 8 decisiones abiertas de v0.3 fueron respondidas por el dueño en el PR #95: costo al comprar, cierre automático reabrible, el operario registra la partida, costo por unidad, valuación por **promedio ponderado**, exceso permitido y registrado como discrepancia, anular conserva las partidas recibidas, 2 decimales. v0.4 asume esas respuestas — en particular el promedio ponderado, que es la base para valuar las fugas en plata.
+Las 8 decisiones abiertas de v0.3 fueron respondidas por el dueño en el PR #95: costo al comprar, cierre automático reabrible, el operario registra la partida, costo por unidad, valuación del consumo (revisada después a **FIFO por partidas** — ver decisión abajo), exceso permitido y registrado como discrepancia, anular conserva las partidas recibidas, 2 decimales. v0.4 asume esas respuestas — en particular el FIFO por partidas, que es la base para valuar las fugas en plata y habilita los **ajustes de entrada/salida** del conteo.
 
 v0.4 rompe una asunción de v0.3 y toma dos decisiones de diseño nuevas:
 
@@ -65,8 +65,15 @@ El dueño registra el costo de lo que compra. El **operario nunca ve plata** —
 > **DECISIÓN RESUELTA (PR #95) — granularidad del costo: por unidad.**
 > El dato base es el costo unitario; el sistema calcula y muestra el total (unidad × cantidad). Con partidas, cada tanda cuesta `cantidad × precio unitario` sin cuentas manuales, y los precios variables entre compras (pollo a 7, a 6, a 8) se registran sin fricción.
 
-> **DECISIÓN RESUELTA (PR #95) — método de valuación del consumo: promedio ponderado.**
-> Los insumos se mezclan en la misma heladera — rastrear de qué tanda salió cada gramo (FIFO) es impráctico en una cocina. Las partidas aportan cantidades exactas y precios reales; el promedio ponderado aparece solo al valuar el consumo. Física exacta, plata promediada.
+> **DECISIÓN RESUELTA (revisada 13 jul 2026) — método de valuación del consumo: FIFO por partidas.**
+> Decisión original (PR #95): promedio ponderado. **Revisada por el dueño**: FIFO como convención contable — el consumo agota partidas en papel, la más vieja primero, sin pretender saber qué kilo físico salió de qué tanda. Razones: (1) es el modelo mental con el que el dueño ya opera, (2) es el diseño probado de NuevosistemaOFICIAL (`aplicar_salida_partidas` FIFO por fecha, `partida_afectada` para trazabilidad), (3) deja ver el remanente por partida ("quedan 2 kg de la tanda del martes") y valúa el inventario a precios recientes.
+>
+> Reglas de borde:
+> - **Consumo** agota partidas de la más vieja a la más nueva. El costo del consumo es la suma de lo agotado de cada partida.
+> - **Conteo con sobrante** → **ajuste de entrada**: el excedente entra como partida de ajuste valuada al costo de la última partida del producto.
+> - **Conteo con faltante** → **ajuste de salida**: el faltante consume partidas igual que un consumo (más vieja primero).
+> - Los ajustes son eventos append-only con quién/cuándo/motivo, como todo.
+> - La valuación es **minería posterior**: partidas remanentes y agotamientos se derivan de los eventos y son recomputables desde cero — ninguna pantalla de captura depende de este cálculo.
 
 ### B. Recepción por partidas
 
@@ -169,7 +176,7 @@ discrepancia   =  stock teórico − conteo actual
                   (con preparados convertidos por equivalencia)
 ```
 
-- La discrepancia se reporta **por producto**, en unidad natural y en plata (valuada a promedio ponderado, la decisión de v0.3).
+- La discrepancia se reporta **por producto**, en unidad natural y en plata (valuada por FIFO por partidas, la decisión revisada de v0.3: el faltante se valúa como ajuste de salida — partidas más viejas primero; el sobrante como ajuste de entrada al costo de la última partida).
 - El tablero del dueño muestra: discrepancia por producto del período, ranking de productos con mayor fuga en soles, y evolución entre conteos.
 - **El operario no ve nada de esto.** Sigue contando a ciegas — el principio #1 es exactamente lo que hace confiable al conteo que alimenta este cálculo.
 - Toda discrepancia es reconstruible: el dueño puede abrir un producto y ver los eventos que componen el teórico (conteo anterior, cada partida, cada pedido cuya receta usa ese insumo).
@@ -262,7 +269,8 @@ Sirve para saber cuándo v0.4 está terminada. Incluye todo lo de v0.2 y v0.3 (q
 - [ ] **El operario nunca ve un costo, un precio, ni un total en plata en ninguna pantalla** — verificable con tests de UI y de API.
 - [ ] El dueño ve en su tablero el **costo de inventario actual** (cuánta plata hay parada en depósito) y el **costo de consumo del período** (cuánta plata se consumió).
 - [ ] Cada costo registrado queda con quién y cuándo lo cargó; las correcciones son registros nuevos con puntero al original.
-- [ ] El costo de consumo y de inventario se valúan por promedio ponderado, y el resultado es consistente y reproducible a mano.
+- [ ] El costo de consumo y de inventario se valúan por FIFO por partidas (consumo agota partidas más viejas primero; inventario = suma de remanentes por partida), y el resultado es consistente y reproducible a mano.
+- [ ] Las diferencias de conteo generan **ajustes de entrada** (sobrante, valuado al costo de la última partida) o **ajustes de salida** (faltante, agota partidas más viejas primero), como eventos append-only con quién/cuándo/motivo.
 
 ### Nuevos en v0.3 — partidas
 
@@ -285,7 +293,7 @@ Sirve para saber cuándo v0.4 está terminada. Incluye todo lo de v0.2 y v0.3 (q
 
 ### Nuevos en v0.4 — reconciliación
 
-- [ ] Tras cada conteo, el tablero muestra la discrepancia por producto (en unidad natural y en soles a promedio ponderado) del período entre conteos.
+- [ ] Tras cada conteo, el tablero muestra la discrepancia por producto (en unidad natural y en soles valuada por FIFO por partidas) del período entre conteos.
 - [ ] Los preparados contados se convierten por equivalencia y acreditan sus crudos en la reconciliación — un batch a medio usar no aparece como fuga.
 - [ ] El tablero rankea los productos por fuga en soles y marca en rojo los que superan el umbral definido (según decisión).
 - [ ] Toda discrepancia es trazable: el dueño puede abrir un producto y ver los eventos que componen su teórico en el período.
