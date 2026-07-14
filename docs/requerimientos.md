@@ -184,6 +184,23 @@ discrepancia   =  stock teórico − conteo actual
 > **DECISIÓN RESUELTA (PR #96) — umbral de tolerancia: 5% de default global, ajustable por producto.**
 > Ninguna cocina cuadra a cero: el umbral separa ruido normal (balanza, factores estimados) de "acá hay algo". El dueño puede ajustar el % por producto — el culantro merma distinto que los tenedores.
 
+## Roles y permisos (revisión del dueño, 13 jul 2026)
+
+El modelo binario dueño/operario se amplía a **tres roles**. Decisión del dueño: el operario-admin **ve y carga costos** igual que el dueño (opción B).
+
+| Rol | Crear órdenes (con costos) | Recibir partidas | Contar inventario | Empacar pedidos | Tablero |
+|---|---|---|---|---|---|
+| **Dueño** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Admin** | ✅ | ✅ | ✅ | ✅ | ❌ |
+| **Cocinero** | ❌ | ✅ | ✅ | ✅ | ❌ |
+
+La regla que NO cambia — y que reformula el principio #1: **la plata vive en las pantallas administrativas, no en las de captura**.
+
+- Crear/editar orden de compra, historial de costos, tablero → muestran plata; accesibles según la tabla.
+- Verificar partida, contar inventario, empacar pedido → **no muestran plata para NINGÚN rol**, ni siquiera el dueño. El conteo a ciegas y la verificación sin sesgo valen para todos: la pantalla de captura no sabe de costos, sin importar quién la use.
+- El **cocinero** nunca ve un costo en ninguna ruta — el estándar de tests que antes aplicaba a "operario" ahora aplica al rol cocinero, y las pantallas de captura se testean sin plata para todos los roles.
+- En la base, los guards de rol (triggers de Backend #1 que exigen `role='owner'` para costos y órdenes) se extienden para aceptar también al admin — trabajo de Backend #2.
+
 ## Principios de diseño (no negociables)
 
 Estas reglas mandan sobre cualquier decisión de implementación. Si algo las contradice, gana el principio.
@@ -192,11 +209,11 @@ Estas reglas mandan sobre cualquier decisión de implementación. Si algo las co
 
 **Recoger bien el input y registrar bien la salida; el análisis es minería posterior.** El sistema de captura optimiza fidelidad y fricción cero en el momento del hecho (entrega verificada, foto del paquete, conteo). Todo cálculo, cruce o detección se hace después, sobre datos crudos bien registrados. Nunca sacrificamos calidad de captura por mostrar análisis en el momento.
 
-### 1. El operario sólo verifica y anota — **y nunca ve plata**
+### 1. Las pantallas de captura no saben de plata — y el cocinero no la ve NUNCA
 
-Nunca ve análisis, totales, promedios, ni lo que el sistema "espera" que haya **fuera de la lista pre-cargada que está verificando**. En entrada, el default anunciado (cantidad) es parte del hecho a verificar, no un análisis. En inventario, sigue contando a ciegas: ver el número esperado invita a "cuadrar" en vez de contar.
+Quien captura no ve análisis, totales, promedios, ni lo que el sistema "espera" que haya **fuera de la lista pre-cargada que está verificando**. En entrada, el default anunciado (cantidad) es parte del hecho a verificar, no un análisis. En inventario, se cuenta a ciegas: ver el número esperado invita a "cuadrar" en vez de contar.
 
-**Ampliación v0.3**: **el operario tampoco ve plata**. Ni precio unitario, ni total, ni suma de partidas en costo. El costo vive del lado del dueño y no aparece en ninguna pantalla accesible al rol de operario. Verificable en tests: cualquier ruta o widget que exponga costo al operario es un bug crítico.
+**Reformulación 13 jul 2026 (roles)**: la plata vive en las **pantallas administrativas** (crear orden, historial de costos, tablero), accesibles a dueño y admin. Las **pantallas de captura** (verificar partida, contar, empacar) no muestran plata para ningún rol — ni siquiera el dueño. El **cocinero** no ve un costo en ninguna ruta del sistema. Verificable en tests: cualquier pantalla de captura que exponga costo, o cualquier ruta que exponga costo al rol cocinero, es un bug crítico.
 
 ### 2. Registrar un evento toma menos de 5 segundos
 
