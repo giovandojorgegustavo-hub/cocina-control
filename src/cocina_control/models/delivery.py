@@ -23,6 +23,7 @@ class Delivery(Base, TimestampMixin):
 
     __table_args__ = (
         sa.Index("ix_deliveries_status", "status"),
+        sa.Index("ix_deliveries_purchase_order_id", "purchase_order_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -49,6 +50,10 @@ class Delivery(Base, TimestampMixin):
     updated_by: Mapped[uuid.UUID | None] = mapped_column(
         sa.ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
     )
+    # v0.3: NULL = legacy delivery (free-form supplier); NOT NULL = partida of a PO.
+    purchase_order_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.ForeignKey("purchase_orders.id", ondelete="RESTRICT"), nullable=True
+    )
 
 
 class DeliveryItem(Base, AppendOnlyMixin):
@@ -58,6 +63,7 @@ class DeliveryItem(Base, AppendOnlyMixin):
         sa.Index("ix_delivery_items_delivery_id", "delivery_id"),
         sa.Index("ix_delivery_items_product_id", "product_id"),
         sa.Index("ix_delivery_items_corrects_id", "corrects_id"),
+        sa.Index("ix_delivery_items_purchase_order_item_id", "purchase_order_item_id"),
         # Prevent chain bifurcation: each item can be corrected at most once.
         # If two concurrent corrections race past the leaf check, the second
         # INSERT will fail here with IntegrityError (uq_delivery_items_corrects_id).
@@ -100,4 +106,9 @@ class DeliveryItem(Base, AppendOnlyMixin):
     )
     confirmed_at: Mapped[datetime | None] = mapped_column(
         sa.DateTime(timezone=True), nullable=True
+    )
+    # v0.3: links the delivery item to the specific PO item it fulfills.
+    # NULL = legacy delivery item (no associated PO).
+    purchase_order_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.ForeignKey("purchase_order_items.id", ondelete="RESTRICT"), nullable=True
     )
