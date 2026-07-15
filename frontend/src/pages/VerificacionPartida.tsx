@@ -1,96 +1,65 @@
 import { useEffect, useReducer, useRef, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import {
-  useDelivery,
-  useOpenDelivery,
-  useConfirmItem,
-  useValidateDelivery,
-} from '../lib/deliveries'
-import { formatRelativeDate } from '../lib/date'
-import type { DeliveryItem } from '../lib/types'
+import { usePartidaDraft, useValidatePartida } from '../lib/purchaseOrders'
+import { useAuthWithGetters } from '../lib/auth'
+import type { PartidaDraftItem } from '../lib/types'
 
 // ---------------------------------------------------------------------------
-// Local item state — mirrors server state with optimistic overlay
+// Local item state — optimistic confirmation, no server round-trips per item
 // ---------------------------------------------------------------------------
 
-interface LocalItem extends DeliveryItem {
-  // optimistic: true while the confirm request is in flight
-  confirming: boolean
-  // confirmed locally (optimistic or server-confirmed)
+interface LocalItem extends PartidaDraftItem {
   confirmedLocally: boolean
-  // the qty we last sent to /confirm (may differ from announced)
   confirmedQty: number | null
 }
 
 type ItemMap = Record<string, LocalItem>
 
 type Action =
-  | { type: 'INIT'; items: DeliveryItem[] }
-  | { type: 'OPTIMISTIC_CONFIRM'; itemId: string; qty: number }
-  | { type: 'REVERT_CONFIRM'; itemId: string }
-  | { type: 'SERVER_CONFIRMED'; itemId: string; qty: number }
+  | { type: 'INIT'; items: PartidaDraftItem[] }
+  | { type: 'CONFIRM'; itemId: string; qty: number }
+  | { type: 'EDIT'; itemId: string; qty: number }
 
 function itemsReducer(state: ItemMap, action: Action): ItemMap {
   switch (action.type) {
     case 'INIT': {
       const next: ItemMap = {}
       for (const item of action.items) {
-        const prev = state[item.id]
-        // Preserve in-flight confirm state so an INIT triggered by a refetch
-        // does not race-cancel an optimistic update that is still in flight.
-        if (prev?.confirming) {
-          next[item.id] = { ...prev, ...item }
+        const prev = state[item.purchase_order_item_id]
+        // Preserve local state on refetch
+        if (prev?.confirmedLocally) {
+          next[item.purchase_order_item_id] = { ...prev, ...item, confirmedLocally: prev.confirmedLocally, confirmedQty: prev.confirmedQty }
         } else {
-          const alreadyConfirmed = item.received_qty !== null
-          next[item.id] = {
+          next[item.purchase_order_item_id] = {
             ...item,
-            confirming: false,
-            confirmedLocally: alreadyConfirmed,
-            confirmedQty: alreadyConfirmed ? item.received_qty : null,
+            confirmedLocally: false,
+            confirmedQty: null,
           }
         }
       }
       return next
     }
-    case 'OPTIMISTIC_CONFIRM': {
+    case 'CONFIRM': {
       const prev = state[action.itemId]
       if (!prev) return state
       return {
         ...state,
         [action.itemId]: {
           ...prev,
-          confirming: true,
           confirmedLocally: true,
           confirmedQty: action.qty,
         },
       }
     }
-    case 'REVERT_CONFIRM': {
+    case 'EDIT': {
       const prev = state[action.itemId]
       if (!prev) return state
       return {
         ...state,
         [action.itemId]: {
           ...prev,
-          confirming: false,
-          // If the server had confirmed it before (received_qty !== null), keep
-          // it confirmed — the revert is only for the optimistic layer.
-          confirmedLocally: prev.received_qty !== null,
-          confirmedQty: prev.received_qty !== null ? prev.received_qty : null,
-        },
-      }
-    }
-    case 'SERVER_CONFIRMED': {
-      const prev = state[action.itemId]
-      if (!prev) return state
-      return {
-        ...state,
-        [action.itemId]: {
-          ...prev,
-          confirming: false,
           confirmedLocally: true,
           confirmedQty: action.qty,
-          received_qty: action.qty,
         },
       }
     }
@@ -109,7 +78,7 @@ interface ToastState {
 }
 
 // ---------------------------------------------------------------------------
-// Skeleton rows for loading state
+// Skeleton row
 // ---------------------------------------------------------------------------
 
 function SkeletonItemRow() {
@@ -139,10 +108,9 @@ interface ItemRowProps {
 
 function ItemRow({ item, isFocused, onConfirm, onEdit }: ItemRowProps) {
   const isConfirmed = item.confirmedLocally
-  const differsFromAnnounced =
-    isConfirmed &&
-    item.confirmedQty !== null &&
-    item.confirmedQty !== item.announced_qty
+  const pendingQty = Number(item.pending_qty)
+  const confirmedQty = item.confirmedQty ?? pendingQty
+  const alreadyReceived = Number(item.already_received)
 
   return (
     <div
@@ -162,7 +130,7 @@ function ItemRow({ item, isFocused, onConfirm, onEdit }: ItemRowProps) {
         {isFocused && !isConfirmed ? '▶' : ''}
       </span>
 
-      {/* Product name + qty */}
+      {/* Product name + qty info */}
       <div className="flex-1 min-w-0">
         <span
           className={[
@@ -172,47 +140,40 @@ function ItemRow({ item, isFocused, onConfirm, onEdit }: ItemRowProps) {
         >
           {item.product_name}
         </span>
-        <span
-          className={[
-            'ml-2 text-sm',
-            isConfirmed ? 'text-gray-400' : 'text-gray-600',
-          ].join(' ')}
-        >
-          {isConfirmed && item.confirmedQty !== null
-            ? `${item.confirmedQty} ${item.unit}`
-            : `${item.announced_qty} ${item.unit}`}
-        </span>
-        {differsFromAnnounced && (
-          <span className="ml-2 text-xs text-gray-400">
-            (anunciado: {item.announced_qty} {item.unit})
+        {isConfirmed ? (
+          <span className="ml-2 text-sm text-gray-400">
+            {confirmedQty} {item.unit}
+          </span>
+        ) : (
+          <span className="ml-2 text-sm text-gray-600">
+            {pendingQty} {item.unit}
           </span>
         )}
+        <span className="block text-xs text-gray-400 mt-0.5">
+          (saldo pendiente · ya recibido: {alreadyReceived} {item.unit})
+        </span>
       </div>
 
       {/* Right side */}
       {isConfirmed ? (
-        <span className="text-green-600 font-bold text-lg flex-shrink-0" aria-label="Confirmado">
+        <span
+          className="text-green-600 font-bold text-lg flex-shrink-0"
+          aria-label="Confirmado"
+        >
           ✓
         </span>
       ) : (
         <div className="flex gap-2 flex-shrink-0">
           <button
-            id={`ok-${item.id}`}
-            onClick={() => onConfirm(item.id, item.announced_qty)}
-            disabled={item.confirming}
-            className={[
-              'min-h-[48px] px-3 text-sm font-semibold border',
-              item.confirming
-                ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-wait'
-                : 'bg-gray-900 text-white border-gray-900 active:opacity-70',
-            ].join(' ')}
-            aria-label={`Confirmar ${item.product_name} con cantidad anunciada`}
+            id={`ok-${item.purchase_order_item_id}`}
+            onClick={() => onConfirm(item.purchase_order_item_id, pendingQty)}
+            className="min-h-[48px] px-3 text-sm font-semibold border bg-gray-900 text-white border-gray-900 active:opacity-70"
+            aria-label={`Confirmar ${item.product_name} con cantidad pendiente`}
           >
-            OK — llegó así
+            OK — llego asi
           </button>
           <button
             onClick={() => onEdit(item)}
-            disabled={item.confirming}
             className="min-h-[48px] px-3 text-sm font-semibold border border-gray-400 text-gray-700 bg-white active:opacity-70"
             aria-label={`Editar cantidad de ${item.product_name}`}
           >
@@ -225,7 +186,7 @@ function ItemRow({ item, isFocused, onConfirm, onEdit }: ItemRowProps) {
 }
 
 // ---------------------------------------------------------------------------
-// Edit quantity modal
+// Edit modal (entrada-08)
 // ---------------------------------------------------------------------------
 
 interface EditModalProps {
@@ -238,11 +199,10 @@ function EditModal({ item, onConfirm, onClose }: EditModalProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [value, setValue] = useReducer(
     (_: string, next: string) => next,
-    String(item.announced_qty),
+    String(item.pending_qty),
   )
 
   useEffect(() => {
-    // Auto-focus, select all so the operator can overtype immediately
     if (inputRef.current) {
       inputRef.current.focus()
       inputRef.current.select()
@@ -252,7 +212,7 @@ function EditModal({ item, onConfirm, onClose }: EditModalProps) {
   function handleSubmit() {
     const parsed = parseFloat(value.replace(',', '.'))
     if (!isFinite(parsed) || parsed < 0) return
-    onConfirm(item.id, parsed)
+    onConfirm(item.purchase_order_item_id, parsed)
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -264,7 +224,6 @@ function EditModal({ item, onConfirm, onClose }: EditModalProps) {
   const isValid = isFinite(parsed) && parsed >= 0
 
   return (
-    // Backdrop — clicking outside the card closes the modal without saving.
     <div
       className="fixed inset-0 z-40 flex items-center justify-center bg-black bg-opacity-50"
       role="dialog"
@@ -272,8 +231,10 @@ function EditModal({ item, onConfirm, onClose }: EditModalProps) {
       aria-label={`Editar cantidad de ${item.product_name}`}
       onClick={onClose}
     >
-      {/* Card — stop propagation so clicks inside don't bubble to the backdrop */}
-      <div className="bg-white w-full max-w-sm mx-4 flex flex-col" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="bg-white w-full max-w-sm mx-4 flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Modal header */}
         <div className="bg-gray-900 text-white px-4 py-4 flex items-center gap-3">
           <button
@@ -288,7 +249,7 @@ function EditModal({ item, onConfirm, onClose }: EditModalProps) {
             <p className="text-base font-bold uppercase tracking-wide">
               {item.product_name}
               <span className="font-normal text-gray-400 ml-2 text-sm normal-case">
-                (anunciado: {item.announced_qty} {item.unit})
+                (saldo pendiente: {item.pending_qty} {item.unit})
               </span>
             </p>
           </div>
@@ -296,7 +257,9 @@ function EditModal({ item, onConfirm, onClose }: EditModalProps) {
 
         {/* Input */}
         <div className="px-6 py-8 flex flex-col items-center gap-4">
-          <p className="text-sm text-gray-600 uppercase tracking-wide">Cantidad recibida</p>
+          <p className="text-sm text-gray-600 uppercase tracking-wide">
+            Cantidad recibida en esta partida
+          </p>
           <div className="flex items-center gap-3">
             <input
               ref={inputRef}
@@ -335,20 +298,23 @@ function EditModal({ item, onConfirm, onClose }: EditModalProps) {
 }
 
 // ---------------------------------------------------------------------------
-// Validated overlay (Pantalla 4)
+// Validated overlay (entrada-09)
 // ---------------------------------------------------------------------------
 
 interface ValidatedOverlayProps {
   supplierName: string
-  itemCount: number
+  partidaNumber: number
+  orderStatus: 'open' | 'partially_received' | 'closed'
   onDone: () => void
 }
 
-function ValidatedOverlay({ supplierName, itemCount, onDone }: ValidatedOverlayProps) {
+function ValidatedOverlay({ supplierName, partidaNumber, orderStatus, onDone }: ValidatedOverlayProps) {
   useEffect(() => {
     const timer = setTimeout(onDone, 1500)
     return () => clearTimeout(timer)
   }, [onDone])
+
+  const isClosed = orderStatus === 'closed'
 
   return (
     <div
@@ -360,11 +326,12 @@ function ValidatedOverlay({ supplierName, itemCount, onDone }: ValidatedOverlayP
         ✓
       </span>
       <h1 className="text-2xl font-black uppercase tracking-wider text-gray-900 mb-3">
-        ENTREGA VALIDADA
+        {isClosed ? 'ORDEN COMPLETA' : 'PARTIDA REGISTRADA'}
       </h1>
       <p className="text-gray-600 text-base mb-10">
-        {supplierName} — {itemCount} {itemCount === 1 ? 'producto' : 'productos'} → stock
-        actualizado
+        {isClosed
+          ? `${supplierName} — todo llego → stock actualizado`
+          : `${supplierName} — partida #${partidaNumber} → stock actualizado`}
       </p>
       <button
         onClick={onDone}
@@ -378,126 +345,59 @@ function ValidatedOverlay({ supplierName, itemCount, onDone }: ValidatedOverlayP
 }
 
 // ---------------------------------------------------------------------------
-// Read-only view for validada deliveries
-// ---------------------------------------------------------------------------
-
-interface ReadOnlyViewProps {
-  items: LocalItem[]
-  validatedAt: string | null
-  supplierName: string
-  onBack: () => void
-}
-
-function ReadOnlyView({ items, validatedAt, supplierName, onBack }: ReadOnlyViewProps) {
-  return (
-    <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
-      <header className="bg-gray-900 text-white px-4 py-4 flex items-center gap-3 flex-shrink-0">
-        <button
-          onClick={onBack}
-          className="min-h-[48px] min-w-[48px] flex items-center justify-center text-white text-xl font-bold"
-          aria-label="Volver"
-        >
-          &lt;
-        </button>
-        <div>
-          <p className="text-xs uppercase tracking-wide text-gray-400">ENTRADA</p>
-          <h1 className="text-base font-bold uppercase tracking-wide">{supplierName}</h1>
-        </div>
-      </header>
-
-      <div className="px-4 py-3 bg-green-50 border-b border-green-200">
-        <p className="text-sm text-green-800 font-medium">
-          Entrega validada{validatedAt ? ` el ${formatRelativeDate(validatedAt)}` : ''}.
-        </p>
-      </div>
-
-      <main className="flex-1 overflow-y-auto">
-        {items.map((item) => (
-          <div
-            key={item.id}
-            className="bg-white border-b border-gray-200 px-4 py-3 flex items-center gap-2 min-h-[56px]"
-          >
-            <span className="flex-1 font-bold text-sm uppercase tracking-wide text-gray-500">
-              {item.product_name}
-            </span>
-            <span className="text-sm text-gray-500">
-              recibido: {item.received_qty ?? '—'} {item.unit}
-            </span>
-            {item.received_qty !== item.announced_qty && (
-              <span className="text-xs text-gray-400 ml-1">
-                (anunciado: {item.announced_qty})
-              </span>
-            )}
-          </div>
-        ))}
-      </main>
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Module-level guard for auto-open: persists across remounts of the same page.
-// Using a Map keyed by delivery-id prevents a second /open if the component
-// unmounts and remounts (e.g. React StrictMode double-invoke in dev).
-// ---------------------------------------------------------------------------
-
-const openAttempts = new Map<string, boolean>()
-
-// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
-export function Verificacion() {
-  const { id } = useParams<{ id: string }>()
+export function VerificacionPartida() {
+  const { orderId } = useParams<{ orderId: string }>()
   const navigate = useNavigate()
+  const { userId } = useAuthWithGetters()
 
-  const { data, isLoading, isError, refetch } = useDelivery(id ?? '')
-  const openMutation = useOpenDelivery()
-  const confirmMutation = useConfirmItem()
-  const validateMutation = useValidateDelivery()
+  const { data, isLoading, isError, refetch } = usePartidaDraft(orderId ?? '', userId)
+  const validateMutation = useValidatePartida()
 
   // Local optimistic item state
   const [localItems, dispatch] = useReducer(itemsReducer, {})
 
-  // Which item is being edited in the modal
+  // Which item is being edited
   const [editingItem, setEditingItem] = useReducer(
     (_: LocalItem | null, next: LocalItem | null) => next,
     null,
   )
 
-  // Toast state
+  // Toast
   const [toast, setToast] = useReducer(
     (_: ToastState, next: ToastState) => next,
     { visible: false, message: '' },
   )
 
-  // Show the validated confirmation overlay
-  const [showValidated, setShowValidated] = useReducer((_: boolean, next: boolean) => next, false)
+  // Validated overlay state
+  const [validatedResult, setValidatedResult] = useReducer(
+    (_: { partidaNumber: number; orderStatus: 'open' | 'partially_received' | 'closed' } | null,
+     next: { partidaNumber: number; orderStatus: 'open' | 'partially_received' | 'closed' } | null) => next,
+    null,
+  )
 
-  // Per-item ref guard: blocks a second confirm request before the first
-  // re-render has a chance to set `confirming: true` in state.
-  const confirmingRefs = useRef<Record<string, boolean>>({})
-
-  // Guard for the validate button: prevents a double-tap from firing two
-  // /validate requests before the mutation state updates.
+  // Guard for validate double-tap
   const validatingRef = useRef(false)
 
-  // Init local items when server data arrives
+  // Init local items when data arrives
   useEffect(() => {
     if (data?.items) {
       dispatch({ type: 'INIT', items: data.items })
     }
   }, [data])
 
-  // Auto-open: if status is no_leida, call /open exactly once per delivery-id.
-  // The guard lives at module level (Map) so it survives remounts (StrictMode).
+  // 409 on draft fetch — order no longer accepts partidas
   useEffect(() => {
-    if (!data) return
-    if (data.status !== 'no_leida') return
-    if (openAttempts.get(data.id)) return
-    openAttempts.set(data.id, true)
-    openMutation.mutate(data.id)
-  }, [data, openMutation])
+    if (isError) {
+      // We check the error type via the query error — axios throws with response.status
+      // The retry:false in the query means we see this immediately
+      setToast({ visible: true, message: 'Esta orden ya no acepta partidas' })
+      setTimeout(() => navigate('/entradas'), 1500)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isError])
 
   // Dismiss toast after 3 seconds
   useEffect(() => {
@@ -506,110 +406,94 @@ export function Verificacion() {
     return () => clearTimeout(t)
   }, [toast.visible])
 
-  // Derived: ordered list from localItems preserving server order
+  // Derived: ordered list
   const orderedItems: LocalItem[] = data
-    ? data.items.map((i) => localItems[i.id] ?? { ...i, confirming: false, confirmedLocally: false, confirmedQty: null })
+    ? data.items.map(
+        (i) =>
+          localItems[i.purchase_order_item_id] ?? {
+            ...i,
+            confirmedLocally: false,
+            confirmedQty: null,
+          },
+      )
     : []
 
   const confirmedCount = orderedItems.filter((i) => i.confirmedLocally).length
   const totalCount = orderedItems.length
-  // allConfirmed requires every item to be locally confirmed AND not have a
-  // request in flight. This prevents validate from enabling while a confirm
-  // is still pending on the server (H-03).
-  const allConfirmed = totalCount > 0 && orderedItems.every(
-    (i) => i.confirmedLocally && !i.confirming,
-  )
+  const allConfirmed = totalCount > 0 && orderedItems.every((i) => i.confirmedLocally)
 
-  // First pending item index (for ▶ focus indicator)
   const firstPendingIndex = orderedItems.findIndex((i) => !i.confirmedLocally)
 
   // ---------------------------------------------------------------------------
-  // Confirm handler (shared by row OK button and modal OK)
+  // Confirm handler — local only, no server request per item
   // ---------------------------------------------------------------------------
 
-  const handleConfirm = useCallback(
-    (itemId: string, qty: number) => {
-      if (!id) return
-      // Ref-level guard: blocks a second tap that arrives before the re-render
-      // has set confirming:true in state. Works even without re-render (H-01).
-      if (confirmingRefs.current[itemId]) return
-      confirmingRefs.current[itemId] = true
-
-      // Optimistic update
-      dispatch({ type: 'OPTIMISTIC_CONFIRM', itemId, qty })
-
-      // Close modal if open
-      setEditingItem(null)
-
-      confirmMutation.mutate(
-        { deliveryId: id, itemId, receivedQty: qty },
-        {
-          onSuccess: () => {
-            dispatch({ type: 'SERVER_CONFIRMED', itemId, qty })
-            confirmingRefs.current[itemId] = false
-          },
-          onError: () => {
-            dispatch({ type: 'REVERT_CONFIRM', itemId })
-            confirmingRefs.current[itemId] = false
-            // Focus the OK button after revert so the operator can retry (H-11).
-            setTimeout(() => {
-              document.getElementById(`ok-${itemId}`)?.focus()
-            }, 0)
-            setToast({
-              visible: true,
-              message: navigator.onLine
-                ? 'No se pudo confirmar. Intentá de nuevo.'
-                : 'Sin conexion — se guarda cuando vuelva.',
-            })
-          },
-        },
-      )
-    },
-    [id, confirmMutation],
-  )
+  const handleConfirm = useCallback((itemId: string, qty: number) => {
+    dispatch({ type: 'CONFIRM', itemId, qty })
+    setEditingItem(null)
+  }, [])
 
   // ---------------------------------------------------------------------------
-  // Validate handler
+  // Validate handler — single POST with all items
   // ---------------------------------------------------------------------------
 
   const handleValidate = useCallback(() => {
-    if (!id || !data) return
-    // Ref-level guard: blocks a second tap before validateMutation.isPending
-    // updates through a re-render (H-02).
+    if (!orderId || !data) return
     if (validatingRef.current) return
     validatingRef.current = true
 
-    validateMutation.mutate(id, {
-      onSuccess: () => {
-        validatingRef.current = false
-        setShowValidated(true)
+    const items = orderedItems.map((item) => ({
+      purchase_order_item_id: item.purchase_order_item_id,
+      received_qty: item.confirmedQty ?? Number(item.pending_qty),
+    }))
+
+    validateMutation.mutate(
+      { orderId, body: { items } },
+      {
+        onSuccess: (response) => {
+          validatingRef.current = false
+          const orderStatus = response.data.order_status
+          const partidaNumber = response.data.partida_number
+          setValidatedResult({ partidaNumber, orderStatus })
+        },
+        onError: (error) => {
+          validatingRef.current = false
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const status = (error as any)?.response?.status
+          if (status === 409) {
+            setToast({ visible: true, message: 'Esta orden ya no acepta partidas' })
+            setTimeout(() => navigate('/entradas'), 1500)
+          } else {
+            setToast({ visible: true, message: 'No se pudo registrar la partida. Toca de nuevo.' })
+          }
+        },
       },
-      onError: (error) => {
-        validatingRef.current = false
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const status = (error as any)?.response?.status
-        if (status === 409) {
-          setToast({ visible: true, message: 'Esta entrega ya fue validada.' })
-          setTimeout(() => navigate('/'), 1500)
-        } else if (!navigator.onLine) {
-          setToast({ visible: true, message: 'Sin conexión. Se va a guardar cuando vuelva la conexión.' })
-        } else {
-          setToast({ visible: true, message: 'No se pudo validar. Tocá de nuevo.' })
-        }
-      },
-    })
-  }, [id, data, validateMutation, navigate])
+    )
+  }, [orderId, data, orderedItems, validateMutation, navigate])
 
   // ---------------------------------------------------------------------------
-  // Guard: no id param (should never happen due to router)
+  // Guard
   // ---------------------------------------------------------------------------
 
-  if (!id) {
-    return null
+  if (!orderId) return null
+
+  // ---------------------------------------------------------------------------
+  // Validated overlay
+  // ---------------------------------------------------------------------------
+
+  if (validatedResult && data) {
+    return (
+      <ValidatedOverlay
+        supplierName={data.supplier_name}
+        partidaNumber={validatedResult.partidaNumber}
+        orderStatus={validatedResult.orderStatus}
+        onDone={() => navigate('/entradas')}
+      />
+    )
   }
 
   // ---------------------------------------------------------------------------
-  // Loading state
+  // Loading
   // ---------------------------------------------------------------------------
 
   if (isLoading) {
@@ -626,18 +510,16 @@ export function Verificacion() {
           <div className="h-5 bg-gray-700 rounded w-48 animate-pulse" />
         </header>
         <main className="flex-1 overflow-y-auto">
-          <div className="flex flex-col">
-            {[1, 2, 3, 4].map((n) => (
-              <SkeletonItemRow key={n} />
-            ))}
-          </div>
+          {[1, 2, 3].map((n) => (
+            <SkeletonItemRow key={n} />
+          ))}
         </main>
       </div>
     )
   }
 
   // ---------------------------------------------------------------------------
-  // Error state (no data at all)
+  // Error (404 / network error on draft fetch)
   // ---------------------------------------------------------------------------
 
   if (isError && !data) {
@@ -654,7 +536,7 @@ export function Verificacion() {
           <h1 className="text-lg font-bold uppercase tracking-wide">ENTRADA</h1>
         </header>
         <main className="flex-1 flex flex-col items-center justify-center px-8 text-center gap-4">
-          <p className="text-gray-700 font-medium">No se pudo cargar la entrega.</p>
+          <p className="text-gray-700 font-medium">No se pudo cargar la orden.</p>
           <button
             onClick={() => void refetch()}
             className="min-h-[48px] px-6 bg-gray-900 text-white font-semibold active:opacity-70"
@@ -662,41 +544,21 @@ export function Verificacion() {
             Reintentar
           </button>
         </main>
+        {toast.visible && (
+          <div
+            role="alert"
+            aria-live="assertive"
+            className="fixed bottom-20 left-4 right-4 z-50 bg-red-600 text-white px-4 py-3 text-sm font-medium"
+          >
+            {toast.message}
+          </div>
+        )}
       </div>
     )
   }
 
   // ---------------------------------------------------------------------------
-  // Read-only: validada
-  // ---------------------------------------------------------------------------
-
-  if (data && data.status === 'validada') {
-    return (
-      <ReadOnlyView
-        items={orderedItems}
-        validatedAt={data.validated_at}
-        supplierName={data.supplier_name}
-        onBack={() => navigate('/entradas')}
-      />
-    )
-  }
-
-  // ---------------------------------------------------------------------------
-  // Validated confirmation overlay (Pantalla 4)
-  // ---------------------------------------------------------------------------
-
-  if (showValidated && data) {
-    return (
-      <ValidatedOverlay
-        supplierName={data.supplier_name}
-        itemCount={data.item_count}
-        onDone={() => navigate('/')}
-      />
-    )
-  }
-
-  // ---------------------------------------------------------------------------
-  // Verification screen (Pantalla 2 + 3)
+  // Verification screen
   // ---------------------------------------------------------------------------
 
   return (
@@ -713,7 +575,7 @@ export function Verificacion() {
         <div>
           <p className="text-xs uppercase tracking-wide text-gray-400">ENTRADA</p>
           <h1 className="text-base font-bold uppercase tracking-wide truncate flex-1 min-w-0">
-            {data?.supplier_name ?? ''}
+            {data?.supplier_name ?? ''}{data ? ` — Partida #${data.partida_number}` : ''}
           </h1>
         </div>
       </header>
@@ -723,19 +585,19 @@ export function Verificacion() {
         {totalCount === 0 ? (
           <div className="flex flex-col items-center justify-center h-full px-8 text-center gap-4 py-16">
             <p className="text-gray-600 font-medium">
-              Esta entrega no tiene productos anunciados. Avisá al dueño.
+              Esta orden no tiene productos con saldo pendiente. Avisa al dueno.
             </p>
             <button
-              onClick={() => navigate('/')}
+              onClick={() => navigate('/entradas')}
               className="min-h-[48px] px-6 bg-gray-900 text-white font-semibold active:opacity-70"
             >
-              Volver al inicio
+              Volver a la bandeja
             </button>
           </div>
         ) : (
           orderedItems.map((item, idx) => (
             <ItemRow
-              key={item.id}
+              key={item.purchase_order_item_id}
               item={item}
               isFocused={idx === firstPendingIndex}
               onConfirm={handleConfirm}
@@ -745,10 +607,10 @@ export function Verificacion() {
         )}
       </main>
 
-      {/* Sticky footer: stock warning + validate button (H-06) */}
+      {/* Sticky footer */}
       <footer className="sticky bottom-0 border-t border-gray-200 bg-white px-4 py-3 flex-shrink-0">
         <p className="text-sm text-gray-600 text-center mb-2">
-          al validar, la entrega impacta el stock
+          al validar, esta partida impacta el stock
         </p>
         <button
           onClick={handleValidate}
@@ -759,15 +621,15 @@ export function Verificacion() {
               ? 'bg-gray-900 text-white active:opacity-70'
               : 'bg-gray-200 text-gray-400 cursor-not-allowed',
           ].join(' ')}
-          aria-label={`Validar entrega ${confirmedCount} de ${totalCount}`}
+          aria-label={`Validar partida ${confirmedCount} de ${totalCount}`}
         >
           {validateMutation.isPending
-            ? 'validando...'
-            : `validar entrega (${confirmedCount}/${totalCount})`}
+            ? 'registrando...'
+            : `validar partida (${confirmedCount}/${totalCount})`}
         </button>
       </footer>
 
-      {/* Edit modal (Pantalla 3) */}
+      {/* Edit modal */}
       {editingItem && (
         <EditModal
           item={editingItem}

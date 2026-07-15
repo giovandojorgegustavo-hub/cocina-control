@@ -37,7 +37,31 @@ export function RequireRole({
 
   if (userRole !== role) {
     // Wrong role — redirect to the correct home for this user
-    const redirect = userRole === 'operator' ? '/' : '/tablero'
+    const redirect = userRole === 'owner' ? '/tablero' : '/'
+    return <Navigate to={redirect} replace />
+  }
+
+  return <>{children}</>
+}
+
+// Redirects away if the authenticated user does not have ANY of the allowed roles.
+// Use this for routes accessible by multiple roles (e.g. cocinero + admin).
+// Assumes it is always rendered inside a RequireAuth boundary (token exists).
+export function RequireAnyRole({
+  roles,
+  children,
+}: {
+  roles: UserRole[]
+  children: React.ReactNode
+}) {
+  const { role: userRole } = useAuthWithGetters()
+
+  if (userRole === null) {
+    return <Navigate to="/login" replace />
+  }
+
+  if (!roles.includes(userRole)) {
+    const redirect = userRole === 'owner' ? '/tablero' : '/'
     return <Navigate to={redirect} replace />
   }
 

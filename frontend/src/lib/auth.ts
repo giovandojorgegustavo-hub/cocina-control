@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import { jwtDecode } from 'jwt-decode'
 
-export type UserRole = 'operator' | 'owner'
+export type UserRole = 'cocinero' | 'owner' | 'admin'
 
 interface JwtPayload {
   sub: string

@@ -181,6 +181,108 @@ export interface DashboardSummary {
 }
 
 // ---------------------------------------------------------------------------
+// Purchase orders (v0.3)
+// ---------------------------------------------------------------------------
+
+export type PurchaseOrderStatus = 'open' | 'partially_received' | 'closed' | 'annulled'
+
+/** EP-2 GET /purchase-orders — owner/admin list item */
+export interface PurchaseOrderListItem {
+  id: string
+  supplier_name: string
+  created_at: string // ISO 8601 UTC
+  derived_status: PurchaseOrderStatus
+  item_count: number
+  total_ordered: string  // Decimal as string
+  total_received: string
+  pending_amount: string
+  pending_summary: string | null
+}
+
+/** EP-1/EP-3 GET /purchase-orders/{id} — detail item */
+export interface PurchaseOrderDetailItem {
+  id: string
+  product_id: string
+  product_name: string
+  unit: string
+  expected_qty: string
+  unit_cost: string
+  received_qty: string
+  pending_qty: string
+  line_total: string
+}
+
+/** EP-3 GET /purchase-orders/{id} — full detail */
+export interface PurchaseOrderDetailResponse {
+  id: string
+  supplier_name: string
+  created_at: string
+  created_by_name: string
+  derived_status: PurchaseOrderStatus
+  items: PurchaseOrderDetailItem[]
+  total_ordered: string
+  total_received: string
+  pending_amount: string
+  partida_count: number
+}
+
+/** EP-1 POST /purchase-orders — request */
+export interface PurchaseOrderCreateItem {
+  product_id: string
+  expected_qty: number
+  unit_cost: number
+}
+
+export interface PurchaseOrderCreate {
+  supplier_name: string
+  items: PurchaseOrderCreateItem[]
+}
+
+/** EP-4 GET /purchase-orders/pending — cocinero/admin, zero monetary fields */
+export interface PurchaseOrderPendingItem {
+  id: string
+  supplier_name: string
+  created_at: string
+  derived_status: 'open' | 'partially_received'
+  pending_items_summary: string
+}
+
+/** EP-5 GET /purchase-orders/{id}/partida-draft — cocinero/admin, zero monetary fields */
+export interface PartidaDraftItem {
+  purchase_order_item_id: string
+  product_id: string
+  product_name: string
+  unit: string
+  pending_qty: string   // Decimal as string
+  already_received: string
+}
+
+export interface PartidaDraftResponse {
+  order_id: string
+  supplier_name: string
+  partida_number: number
+  items: PartidaDraftItem[]
+}
+
+/** EP-6 POST /purchase-orders/{id}/partidas — request */
+export interface PartidaCreateItem {
+  purchase_order_item_id: string
+  received_qty: number
+}
+
+export interface PartidaCreate {
+  items: PartidaCreateItem[]
+}
+
+/** EP-6 POST /purchase-orders/{id}/partidas — response, zero monetary fields */
+export interface PartidaResponse {
+  delivery_id: string
+  partida_number: number
+  order_id: string
+  order_status: 'open' | 'partially_received' | 'closed'
+}
+
+// ---------------------------------------------------------------------------
 // Traceability event
 // ---------------------------------------------------------------------------
 

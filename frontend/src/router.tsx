@@ -1,8 +1,10 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom'
 import { Login } from './pages/Login'
 import { Home } from './pages/Home'
-import { Bandeja } from './pages/Bandeja'
-import { Verificacion } from './pages/Verificacion'
+import { BandejaPartidas } from './pages/BandejaPartidas'
+import { VerificacionPartida } from './pages/VerificacionPartida'
+import { OrdenesLista } from './pages/OrdenesLista'
+import { OrdenNueva } from './pages/OrdenNueva'
 import { NuevoPedido } from './pages/NuevoPedido'
 import { BandejaPedidos } from './pages/BandejaPedidos'
 import { CompletarPedido } from './pages/CompletarPedido'
@@ -11,7 +13,7 @@ import { ContarProducto } from './pages/ContarProducto'
 import { InventarioCompletado } from './pages/InventarioCompletado'
 import { Tablero } from './pages/Tablero'
 import { Trazabilidad } from './pages/Trazabilidad'
-import { RequireAuth, RequireRole } from './lib/guards'
+import { RequireAuth, RequireRole, RequireAnyRole } from './lib/guards'
 
 // React Router requires basename WITHOUT trailing slash.
 // import.meta.env.BASE_URL is injected by Vite and equals basePath from vite.config.ts.
@@ -27,9 +29,9 @@ export const router = createBrowserRouter([
     path: '/',
     element: (
       <RequireAuth>
-        <RequireRole role="operator">
+        <RequireAnyRole roles={['cocinero', 'admin']}>
           <Home />
-        </RequireRole>
+        </RequireAnyRole>
       </RequireAuth>
     ),
   },
@@ -37,19 +39,39 @@ export const router = createBrowserRouter([
     path: '/entradas',
     element: (
       <RequireAuth>
-        <RequireRole role="operator">
-          <Bandeja />
-        </RequireRole>
+        <RequireAnyRole roles={['cocinero', 'admin', 'owner']}>
+          <BandejaPartidas />
+        </RequireAnyRole>
       </RequireAuth>
     ),
   },
   {
-    path: '/entradas/:id',
+    path: '/entradas/:orderId',
     element: (
       <RequireAuth>
-        <RequireRole role="operator">
-          <Verificacion />
-        </RequireRole>
+        <RequireAnyRole roles={['cocinero', 'admin', 'owner']}>
+          <VerificacionPartida />
+        </RequireAnyRole>
+      </RequireAuth>
+    ),
+  },
+  {
+    path: '/ordenes',
+    element: (
+      <RequireAuth>
+        <RequireAnyRole roles={['owner', 'admin']}>
+          <OrdenesLista />
+        </RequireAnyRole>
+      </RequireAuth>
+    ),
+  },
+  {
+    path: '/ordenes/nueva',
+    element: (
+      <RequireAuth>
+        <RequireAnyRole roles={['owner', 'admin']}>
+          <OrdenNueva />
+        </RequireAnyRole>
       </RequireAuth>
     ),
   },
@@ -57,9 +79,9 @@ export const router = createBrowserRouter([
     path: '/inventario',
     element: (
       <RequireAuth>
-        <RequireRole role="operator">
+        <RequireAnyRole roles={['cocinero', 'admin', 'owner']}>
           <InventarioLista />
-        </RequireRole>
+        </RequireAnyRole>
       </RequireAuth>
     ),
   },
@@ -67,9 +89,9 @@ export const router = createBrowserRouter([
     path: '/inventario/contar/:productId',
     element: (
       <RequireAuth>
-        <RequireRole role="operator">
+        <RequireAnyRole roles={['cocinero', 'admin', 'owner']}>
           <ContarProducto />
-        </RequireRole>
+        </RequireAnyRole>
       </RequireAuth>
     ),
   },
@@ -77,9 +99,9 @@ export const router = createBrowserRouter([
     path: '/inventario/completado',
     element: (
       <RequireAuth>
-        <RequireRole role="operator">
+        <RequireAnyRole roles={['cocinero', 'admin', 'owner']}>
           <InventarioCompletado />
-        </RequireRole>
+        </RequireAnyRole>
       </RequireAuth>
     ),
   },
@@ -87,9 +109,9 @@ export const router = createBrowserRouter([
     path: '/pedidos/nuevo',
     element: (
       <RequireAuth>
-        <RequireRole role="operator">
+        <RequireAnyRole roles={['cocinero', 'admin', 'owner']}>
           <NuevoPedido />
-        </RequireRole>
+        </RequireAnyRole>
       </RequireAuth>
     ),
   },
@@ -107,9 +129,9 @@ export const router = createBrowserRouter([
     path: '/pedidos/:id/completar',
     element: (
       <RequireAuth>
-        <RequireRole role="operator">
+        <RequireAnyRole roles={['cocinero', 'admin', 'owner']}>
           <CompletarPedido />
-        </RequireRole>
+        </RequireAnyRole>
       </RequireAuth>
     ),
   },

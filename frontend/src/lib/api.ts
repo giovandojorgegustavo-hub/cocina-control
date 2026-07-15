@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { useAuth } from './auth'
+import { queryClient } from './queryClient'
 
 // API base URL resolution:
 //   1. If VITE_API_URL is set explicitly, it wins (absolute URL or prefix for exotic setups).
@@ -29,6 +30,7 @@ apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
+      queryClient.clear()
       useAuth.getState().clearToken()
     }
     return Promise.reject(error)
