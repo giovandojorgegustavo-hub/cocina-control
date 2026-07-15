@@ -4,7 +4,7 @@
 
 Que el dueño pre-cargue una compra (proveedor, productos, cantidades y costos) antes de que el proveedor llegue. La orden queda abierta; cuando llegan las partidas, el operario las verifica usando el flujo de entrada (ver `registro-entrada.md`). El dueño puede seguir el estado de sus órdenes, ver lo que efectivamente llegó, reabrir una cerrada si hace falta, anular con motivo, y **editar la compra** (cantidad esperada y/o costo unitario de una línea) sin sobrescribir el registro original.
 
-> **Revisión 13 jul 2026 — "no es corregir un costo, es editar la compra".** El flujo que antes se llamaba "corregir costo" se reencuadra: lo que el dueño edita es la **línea de la orden** — la cantidad esperada, el costo unitario, o ambos. Cada edición es un registro nuevo append-only que apunta al anterior (el modelo de backend ya soporta ambas cadenas). Ver Pantalla 6.
+> **Revisión 13 jul 2026 — "no es corregir un costo, es editar la compra".** El flujo que antes se llamaba "corregir costo" se reencuadra: lo que el dueño edita es la **línea de la orden** — la cantidad esperada, el costo unitario, o ambos. Cada edición es un registro nuevo append-only que apunta al anterior (el modelo de backend ya soporta ambas cadenas). La edición se hace en el detalle de la orden en modo edición (Pantalla 7); la auditoría, en el historial de la orden (Pantalla 6).
 
 ## Usuario
 
@@ -190,7 +190,8 @@ Vista completa: lo que se pidió, cada partida que llegó (con quién y cuándo 
 - El saldo pendiente por producto: cantidad pedida menos la suma de todas las partidas recibidas para ese producto.
 - "✓" en la columna "Saldo" indica que ese producto está completo.
 - "← " en la columna "Saldo" indica que todavía falta.
-- Si la orden tiene ediciones (cantidad esperada y/o costo de alguna línea), se muestra "ver historial de la orden", que abre el historial de la **orden completa** (ver Pantalla 6). La edición en sí es por línea: cada línea permite abrir el modal "editar compra".
+- Si la orden tiene ediciones (cantidad esperada y/o costo de alguna línea), se muestra "ver historial de la orden", que abre el historial de la **orden completa** (ver Pantalla 6).
+- El botón **"editar compra"** (visible para dueño y admin) activa el **modo edición** del detalle: Pedido y Costo unit. se vuelven editables en todas las líneas (ver Pantalla 7).
 - Los totales en soles aparecen porque es vista del dueño.
 - El botón "reabrir" solo es visible si la orden está en estado **cerrada**. Si está abierta o recibida parcial, no aparece.
 - El botón "anular orden" siempre visible mientras la orden no esté ya anulada.
@@ -229,7 +230,7 @@ Al confirmar:
 - En el detalle de la orden, aparece una línea en el historial: "Reabierta el 14 jul 2026 — 11:05 (Juan Dueño) — Motivo: El proveedor mandó 10 kg más de pollo el 14 jul".
 - El operario la vuelve a ver en su bandeja como abierta, con el saldo pendiente calculado a partir de todo lo ya recibido.
 
-> PREGUNTA A BACKEND: ¿la reapertura recalcula automáticamente el saldo pendiente a partir de las partidas ya registradas? Asumo: sí — el saldo se recalcula contra la cantidad esperada **vigente** de cada línea. Si el dueño quiere pedir más cantidad de un producto, edita la compra (Pantalla 6): la cantidad esperada vigente sube y el saldo pendiente se recalcula solo.
+> PREGUNTA A BACKEND: ¿la reapertura recalcula automáticamente el saldo pendiente a partir de las partidas ya registradas? Asumo: sí — el saldo se recalcula contra la cantidad esperada **vigente** de cada línea. Si el dueño quiere pedir más cantidad de un producto, edita la compra (Pantalla 7): la cantidad esperada vigente sube y el saldo pendiente se recalcula solo.
 
 ---
 
@@ -298,7 +299,7 @@ Al confirmar en cualquier caso:
 
 Accesible desde el detalle de la orden (Pantalla 3), al tocar "ver historial de la orden". Muestra las **ediciones de la compra** de la orden completa: cantidad esperada y costo unitario, no solo costo.
 
-**Regla: se edita por línea, se audita por orden.** El modal de edición opera sobre UNA línea (un producto); este historial muestra TODAS las ediciones de TODAS las líneas de la orden, mezcladas y ordenadas por fecha descendente, con columna Producto para distinguirlas.
+**Regla: se registra por línea, se audita por orden.** La edición (Pantalla 7) puede tocar varias líneas de una vez, pero cada línea modificada genera SU registro de corrección; este historial muestra TODAS las ediciones de TODAS las líneas de la orden, mezcladas y ordenadas por fecha descendente, con columna Producto para distinguirlas.
 
 **Este historial es DE LA ORDEN** — el lado "entrada de plata": qué se pidió y a qué precio, con sus ediciones append-only. No es un historial del producto (los movimientos del producto — partidas, pedidos, conteos — viven en la trazabilidad del tablero).
 
@@ -325,49 +326,58 @@ Pueden editar la compra el **dueño y el admin** (revisión de roles del 13 jul 
 ```
 
 - Cada fila es un registro append-only de una línea: el original ([registro original]) o una edición que apunta al anterior de la misma línea.
-- **"+ editar compra"** abre el modal para la línea que el dueño elija. También se llega directo desde la línea en el detalle de la orden (Pantalla 3).
+- **"+ editar compra"** lleva al detalle de la orden en **modo edición** (Pantalla 7).
 
-Al tocar "editar compra":
+---
+
+## Pantalla 7 — Editar compra (modo edición del detalle)
+
+No hay modal ni pantalla aparte: **"editar compra" es un modo de la Pantalla 3 (detalle de la orden)**. El botón "editar compra" del detalle lo activa. Caso real que resuelve: la factura llega con varios precios ajustados y se corrigen todos de una sola guardada.
 
 ```
 +------------------------------------------------------------------------------+
+|  <  ORDEN — Carniceria Lopez                 [ RECIBIDA PARCIAL ]            |
+|  EDITANDO COMPRA — Pedido y Costo unit. editables; el resto, solo lectura   |
++------------------------------------------------------------------------------+
 |                                                                              |
-|  +------------------------------------------+                               |
-|  |  EDITAR COMPRA — POLLO                   |                               |
-|  |  Vigente: 100 kg · S/. 7,00 / kg         |                               |
-|  |                                          |                               |
-|  |  Cantidad esperada                       |                               |
-|  |  +-------------------------------+       |                               |
-|  |  |  [ 100 ]  kg                  |       |                               |
-|  |  +-------------------------------+       |                               |
-|  |                                          |                               |
-|  |  Costo unitario                          |                               |
-|  |  +-------------------------------+       |                               |
-|  |  |  S/.  [ 7,00 ]                |       |                               |
-|  |  +-------------------------------+       |                               |
-|  |                                          |                               |
-|  |  Motivo (opcional)                       |                               |
-|  |  +-------------------------------+       |                               |
-|  |  |  Factura llegó con precio     |       |                               |
-|  |  |  ajustado                     |       |                               |
-|  |  +-------------------------------+       |                               |
-|  |                                          |                               |
-|  |  [ cancelar ]      [ guardar edición ]   |                               |
-|  +------------------------------------------+                               |
+|  PRODUCTOS DE LA ORDEN                                                       |
+|  +------------------------------------------------------------------------+  |
+|  | Producto  | Pedido       | Recibido | Saldo   | Costo unit.  | Total   |  |
+|  |-----------|--------------|----------|---------|--------------|---------|  |
+|  | POLLO     | [ 110 ] kg   |   60 kg  |  50 kg ←|  S/.[ 7,50 ] | 420,00  |  |
+|  | CERDO     | [  20 ] kg   |   20 kg  |   —  ✓  |  S/.[ 9,50 ] | 190,00  |  |
+|  +------------------------------------------------------------------------+  |
+|   (Recibido, Saldo, totales: en gris — hechos del operario, bloqueados)      |
 |                                                                              |
+|  PARTIDAS RECIBIDAS  (gris, bloqueado)                                       |
+|  +------------------------------------------------------------------------+  |
+|  | #2  12 jul · 09:30  María Op.   POLLO 30 kg, CERDO 20 kg               |  |
+|  | #1  11 jul · 14:05  Juan Op.    POLLO 30 kg                            |  |
+|  +------------------------------------------------------------------------+  |
+|                                                                              |
+|  Motivo (opcional)                                                           |
+|  +-----------------------------------------------+                          |
+|  |  Factura llegó con precios ajustados          |                          |
+|  +-----------------------------------------------+                          |
+|                                                                              |
+|  [ cancelar ]                                       [ guardar edición ]      |
 +------------------------------------------------------------------------------+
 ```
 
-- Los dos campos vienen **precargados con los valores vigentes**. El dueño cambia uno, el otro, o ambos.
-- Guardar sin cambiar nada no crea registro (el botón queda deshabilitado si ambos valores son iguales a los vigentes).
+Reglas del modo edición:
 
-Al guardar:
+- Las columnas **Pedido** (cantidad esperada) y **Costo unit.** de **todas las líneas** se vuelven inputs editables, precargados con los valores vigentes — mismo estilo que las filas de la orden nueva (Pantalla 1).
+- **Recibido, Saldo, los totales y PARTIDAS RECIBIDAS quedan bloqueados y en gris**: visibles pero no editables. Son hechos del operario — no se tocan desde acá.
+- Un solo campo **Motivo (opcional)** al pie, compartido por toda la guardada.
+- "guardar edición" queda deshabilitado si ninguna línea cambió. "cancelar" descarta todo y vuelve al detalle normal.
 
-- Se crea un **registro nuevo de edición** que apunta al registro anterior (append-only). El original nunca se toca. El modelo de backend ya soporta ambas cadenas: cantidad esperada y costo.
-- Los valores vigentes de la línea pasan a ser los nuevos.
-- El saldo pendiente de la línea se recalcula contra la cantidad esperada vigente.
-- El historial muestra todos los registros, ordenados más reciente primero.
-- El tablero del dueño y la valuación FIFO usan el costo vigente de la línea para las partidas de esta orden.
+Al guardar (semántica backend):
+
+- **Cada línea MODIFICADA** genera su registro de corrección append-only que apunta al registro anterior de esa línea. El modelo ya soporta ambas cadenas: cantidad esperada y costo.
+- Todas las correcciones de una misma guardada **comparten motivo y timestamp**.
+- Las líneas no tocadas **no generan nada**.
+- Los valores vigentes pasan a ser los nuevos; el saldo pendiente se recalcula contra la cantidad esperada vigente; la valuación FIFO usa el costo vigente de cada línea para las partidas de esta orden.
+- El historial de la orden (Pantalla 6) muestra cada corrección como una fila más.
 
 > **Nota — esto NO reemplaza la corrección de cantidades RECIBIDAS.** Editar la compra toca lo que se **pidió** (cantidad esperada) y a qué **precio**. Lo que efectivamente **llegó** lo registra el operario al verificar cada partida — flujo de v0.2, sin cambios (ver `registro-entrada.md`). Compra y entrada siguen siendo hechos distintos con registros distintos.
 
@@ -422,7 +432,7 @@ Banner naranja arriba, no bloquea la lectura de las órdenes ya cargadas. Si el 
 ## Correcciones en este flujo
 
 - **Estructura de la orden (proveedor, alta/baja de líneas):** editable mientras no haya partidas registradas; congelada a partir de la primera partida. Ver pregunta a backend sobre edición de entregas anunciadas en `registro-entrada.md`.
-- **Cantidad esperada y costo unitario de una línea:** siempre editables con registro nuevo — "editar compra", ver Pantalla 6. No hay ventana de tiempo — dueño y admin pueden editar en cualquier momento, incluso con partidas recibidas.
+- **Cantidad esperada y costo unitario:** siempre editables con registro nuevo por línea — "editar compra", modo edición del detalle, ver Pantalla 7. No hay ventana de tiempo — dueño y admin pueden editar en cualquier momento, incluso con partidas recibidas.
 - **Cantidades recibidas:** NO se corrigen acá — la corrección de una partida es el flujo del operario de v0.2 (`registro-entrada.md`).
 - **Anulación:** no es reversible excepto por reapertura explícita. Pero al ser todo append-only, el registro de anulación siempre está. Un order anulada NO se puede reabrir — crear una nueva orden si hace falta.
 
