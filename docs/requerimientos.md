@@ -74,6 +74,7 @@ El dueño registra el costo de lo que compra. El **operario nunca ve plata** —
 > - **Conteo con faltante** → **ajuste de salida**: el faltante consume partidas igual que un consumo (más vieja primero).
 > - Los ajustes son eventos append-only con quién/cuándo/motivo, como todo.
 > - La valuación es **minería posterior**: partidas remanentes y agotamientos se derivan de los eventos y son recomputables desde cero — ninguna pantalla de captura depende de este cálculo.
+> - **Corrección de costo → recalcula (decisión del dueño, 15 jul 2026).** Corregir el costo de una compra arregla un ERROR sobre un hecho pasado (la factura siempre dijo el valor correcto); las valuaciones derivadas (costo de consumo, ajustes valuados, tablero) se recomputan con el costo corregido, también hacia atrás. El "rige hacia adelante" queda reservado para cambios de CRITERIO: recetas y factores de conversión (v0.4). Los eventos crudos jamás se recalculan — solo los números derivados.
 
 ### B. Recepción por partidas
 
