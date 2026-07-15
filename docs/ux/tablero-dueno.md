@@ -2,9 +2,11 @@
 
 > **Qué cambió respecto de v0.2:**
 > - Se suman tres widgets nuevos: **Costo de inventario**, **Costo de consumo del período** y **Órdenes de compra abiertas**.
-> - La tabla de consumo y stock gana una columna **Costo consumo** (valuado a promedio ponderado).
+> - La tabla de consumo y stock gana una columna **Costo consumo** (valuado por FIFO por partidas).
 > - La vista de trazabilidad por producto suma los eventos de tipo **PARTIDA** y **ORDEN** (además de los ya existentes).
 > - Nueva sección al final: cómo el dueño arranca una orden nueva desde el tablero.
+>
+> **Revisión 13 jul 2026 — FIFO por partidas:** la decisión de valuación cambió de promedio ponderado (PR #95) a **FIFO por partidas**. Ya no existe un "costo vigente" único por producto: el valor del stock es la **suma de las partidas remanentes, cada una a su costo**. Este documento se actualizó: toda mención a PMP fue reemplazada, y se agregó la pantalla **"Partidas por producto"**.
 
 ---
 
@@ -36,15 +38,16 @@ No aplica el techo de 3 toques / 5 segundos — no es un flujo de captura. La me
 
 ---
 
-## Nota sobre promedio ponderado (PMP)
+## Nota sobre FIFO por partidas
 
-El **promedio ponderado** (PMP) es el método de valuación de inventario elegido (decisión resuelta, PR #95). Significa que el costo de cada unidad en stock no es el costo de la última compra ni de la primera, sino un promedio ponderado por cantidad de todas las compras activas:
+El método de valuación es **FIFO por partidas** (decisión resuelta en PR #95 como promedio ponderado, **revisada por el dueño el 13 jul 2026**). Es una convención contable: el consumo agota partidas *en papel*, la más vieja primero, sin pretender saber qué kilo físico salió de qué tanda.
 
-> PMP = (suma de cantidad × costo unitario de cada partida recibida) ÷ (suma de cantidades recibidas)
+- **Costo de consumo** = suma de lo agotado de cada partida, de la más vieja a la más nueva, cada tramo a su costo.
+- **Costo de inventario** = suma de las **partidas remanentes**, cada una a su costo unitario. No hay un costo único por producto — hay tantos costos como partidas remanentes.
 
-Ejemplo: llegaron 30 kg de pollo a S/. 7,00 y después 40 kg a S/. 8,00. El PMP es (30×7 + 40×8) ÷ 70 = S/. 7,57/kg. El costo de consumo y el costo de inventario se calculan a ese valor.
+Ejemplo: llegaron 30 kg de pollo a S/. 7,00 y después 40 kg a S/. 8,00. Se consumieron 35 kg → agotan los 30 kg de la primera partida (S/. 210,00) más 5 kg de la segunda (S/. 40,00) = **S/. 250,00 de consumo**. Quedan 35 kg remanentes de la segunda partida a S/. 8,00 = **S/. 280,00 de inventario**.
 
-Esta nota aparece una vez en este documento, como referencia. No se muestra en pantalla al dueño — se asume que lo entiende o que el onboarding se lo explica.
+La valuación es minería posterior: partidas remanentes y agotamientos se derivan de los eventos y son recomputables desde cero. Esta nota aparece una vez en este documento, como referencia. No se muestra en pantalla al dueño — se asume que lo entiende o que el onboarding se lo explica.
 
 ---
 
@@ -75,9 +78,10 @@ Desktop / tablet horizontal:
 |  |  COSTO DE INVENTARIO          |  |  COSTO DE CONSUMO DEL PERÍODO    |    |
 |  |                               |  |                                   |    |
 |  |  S/. 2.340,80                 |  |  S/. 1.120,50                    |    |
-|  |  plata parada en depósito     |  |  valuado a PMP · 7 días          |    |
-|  |  valuado a PMP                |  |                                   |    |
+|  |  plata parada en depósito     |  |  valuado por FIFO · 7 días       |    |
+|  |  suma de remanentes (FIFO)    |  |                                   |    |
 |  |                               |  |  [ ver detalle por producto ]    |    |
+|  |  [ ver partidas x producto ]  |  |                                   |    |
 |  +-------------------------------+  +-----------------------------------+    |
 |                                                                              |
 |  +------------------------------------------+                               |
@@ -124,21 +128,21 @@ Desktop / tablet horizontal:
 
 ### Widget "Costo de inventario" (nuevo en v0.3)
 
-- **Un número grande:** total en soles de lo que hay en stock ahora, valuado a PMP.
-- Etiqueta secundaria: "plata parada en depósito · valuado a PMP".
+- **Un número grande:** total en soles de lo que hay en stock ahora = **suma de las partidas remanentes de todos los productos, cada una a su costo** (FIFO).
+- Etiqueta secundaria: "plata parada en depósito · suma de remanentes (FIFO)".
 - No depende del período seleccionado en la barra — siempre es "ahora".
-- No tiene botón de detalle en v0.3 (ese nivel de drill-down queda para v0.4 o cuando lo pida el dueño).
+- **"ver partidas por producto"** abre el detalle de partidas remanentes (ver la vista "Partidas por producto" más abajo), arrancando por la lista de productos con stock valuado.
 
-> PREGUNTA A BACKEND: el costo de inventario se calcula como suma de (stock actual por producto × PMP de ese producto). ¿El PMP se calcula sobre todas las partidas históricas o solo las del período seleccionado? Asumo: histórico — el PMP es acumulado desde la primera compra registrada. El período no afecta el PMP, solo la ventana de consumo.
+> PREGUNTA A BACKEND: el costo de inventario se calcula como suma de (remanente de cada partida × costo unitario de esa partida), sobre todas las partidas históricas no agotadas. El período seleccionado no afecta este cálculo — ¿correcto? Asumo: sí; el período solo afecta la ventana de consumo.
 
 ### Widget "Costo de consumo del período" (nuevo en v0.3)
 
-- **Un número grande:** total en soles del consumo del período seleccionado, valuado a PMP.
-- Etiqueta secundaria: "valuado a PMP · [etiqueta del período seleccionado]".
+- **Un número grande:** total en soles del consumo del período seleccionado, valuado por FIFO.
+- Etiqueta secundaria: "valuado por FIFO · [etiqueta del período seleccionado]".
 - Cambia cuando el dueño cambia el período en la barra.
 - "Ver detalle por producto" abre la tabla filtrada con el consumo y costo por producto para el período.
 
-> PREGUNTA A BACKEND: el costo de consumo del período se calcula como suma de (consumo por diferencia de cada producto × PMP de ese producto). ¿Es correcto? Asumo: sí. El consumo por diferencia ya existe en v0.2; el PMP viene de las órdenes registradas en v0.3.
+> PREGUNTA A BACKEND: el costo de consumo del período se calcula agotando partidas de la más vieja a la más nueva y sumando lo agotado de cada una a su costo. ¿Es correcto? Asumo: sí. El consumo por diferencia ya existe en v0.2; las partidas con costo vienen de las órdenes registradas en v0.3.
 
 > PREGUNTA A BACKEND: ¿qué pasa si un producto tiene consumo registrado pero no tiene ningún costo cargado (sin órdenes de compra con ese producto)? Asumo: se muestra el consumo en cantidad pero la columna "Costo consumo" queda vacía con etiqueta "sin costo cargado" para ese producto. El total del widget excluye ese producto.
 
@@ -157,7 +161,7 @@ Una fila por producto activo del catálogo. Columnas:
 - **Stock ahora** — último inventario registrado, ajustado por partidas validadas posteriores.
 - **Entradas** — suma de lo recibido en partidas **validadas** en el rango elegido (el valor recibido en la partida, no lo pedido en la orden).
 - **Consumo (diff)** — cálculo: `stock inicial + entradas − stock actual`. Consumo por diferencia, igual que v0.2.
-- **Costo consumo** *(nuevo)* — `consumo por diferencia × PMP del producto`. Valuado a promedio ponderado. Si no hay costo cargado para el producto, celda vacía con "—".
+- **Costo consumo** *(nuevo)* — consumo por diferencia valuado por **FIFO por partidas**: el consumo agota partidas de la más vieja a la más nueva y se suma lo agotado de cada una a su costo. Si no hay costo cargado para el producto, celda vacía con "—".
 - **Alerta** — semáforo visual.
 
 Ordenada por defecto por "alerta" descendente, después por consumo descendente.
@@ -165,6 +169,49 @@ Ordenada por defecto por "alerta" descendente, después por consumo descendente.
 > PREGUNTA A BACKEND: la fórmula de consumo por diferencia necesita un "stock de inicio del período". ¿Se toma el último inventario anterior al inicio del rango, o el primero dentro del rango? Asumo: último inventario anterior. Si no existe, se muestra "sin dato de inicio" en esa fila.
 
 > PREGUNTA A BACKEND: ¿qué dispara el ícono de advertencia "⚠" en la columna de consumo? En v0.2 y v0.3 asumo solo casos matemáticamente imposibles (consumo negativo, stock actual mayor que stock inicial + entradas). Alertas por desviación quedan para cuando haya recetas (v0.4).
+
+---
+
+## Vista de partidas por producto (nueva — revisión FIFO)
+
+El detalle de la valuación: qué partidas remanentes componen el stock de un producto y cuánto vale cada una. Es la pantalla que hace tangible el FIFO — "quedan 2 kg de la tanda del martes".
+
+**Acceso** (todas rutas del tablero → **solo dueño**, igual que todo el tablero):
+
+- Desde el widget "Costo de inventario" → "ver partidas por producto" (lista de productos con stock valuado; tocar uno abre esta vista).
+- Desde la tabla "consumo y stock por producto" → tocar el valor de la columna "Stock ahora".
+- Desde la trazabilidad del producto → link "ver partidas remanentes".
+
+```
++------------------------------------------------------------------------------+
+|  <  PARTIDAS — POLLO                                                         |
++------------------------------------------------------------------------------+
+|                                                                              |
+|  Partidas remanentes (FIFO — la más vieja se consume primero)                |
+|  +------------------------------------------------------------------------+  |
+|  | Tanda / fecha   | Proveedor         | Restante | Costo unit. | Subtotal |  |
+|  |-----------------|-------------------|----------|-------------|----------|  |
+|  | #1 · 10 jul     | Carniceria Lopez  |   1 kg   |  S/. 6,00   | S/. 6,00 |  |
+|  | #3 · 12 jul     | Carniceria Lopez  |   5 kg   |  S/. 7,50   | S/. 37,50|  |
+|  +------------------------------------------------------------------------+  |
+|                                                                              |
+|  -----------------------------------------------------------------------     |
+|  Stock total:          6 kg                                                  |
+|  Valor total (FIFO):   S/. 43,50                                             |
+|  -----------------------------------------------------------------------     |
+|                                                                              |
+|  [ ver trazabilidad completa ]                                               |
++------------------------------------------------------------------------------+
+```
+
+- Una fila por **partida remanente**: número de tanda, fecha, proveedor, cantidad restante, costo unitario y subtotal (restante × costo unit.).
+- Ordenadas de la más vieja a la más nueva — el orden en que el FIFO las va a agotar.
+- Al pie: **stock total** (suma de restantes) y **valor total** (suma de subtotales). Es exactamente el aporte de este producto al widget "Costo de inventario".
+- Las partidas agotadas **no aparecen** — esto es la foto del remanente, no el historial (el historial completo está en la trazabilidad).
+- Las partidas de ajuste de entrada (sobrante de conteo) aparecen como una partida más, con etiqueta "ajuste" en lugar de proveedor.
+- Solo lectura: acá no se edita nada. Los costos se editan en la orden (`orden-compra.md`, Pantalla 6); las cantidades recibidas, en el flujo de partidas del operario.
+
+> PREGUNTA A BACKEND: ¿el remanente por partida se expone ya calculado o el frontend lo deriva de eventos? Asumo: calculado por backend (misma minería que el costo de inventario), recomputable desde cero.
 
 ---
 
@@ -181,7 +228,8 @@ Se abre desde "ver trazabilidad por producto" o desde tocar una fila de la tabla
 |                                                                              |
 |  Stock ahora: 12 kg                                                          |
 |  Consumo del período: 58 kg                                                  |
-|  Costo consumo (PMP): S/. 438,86                                              |
+|  Costo consumo (FIFO): S/. 438,86                                             |
+|  [ ver partidas remanentes ]                                                 |
 |                                                                              |
 |  EVENTOS                                                                     |
 |  +------------------------------------------------------------------------+  |
@@ -232,7 +280,7 @@ Layout apilado, mismos widgets en orden:
 +----------------------+
 | COSTO CONSUMO        |
 | S/. 1.120,50         |
-| valuado PMP · 7d     |
+| FIFO · 7d            |
 +----------------------+
 | ORDENES ABIERTAS     |
 | Abiertas        3    |
@@ -288,8 +336,9 @@ Banner naranja: "Sin conexión — mostrando datos guardados (última sync: hace
 - Stock actual.
 - Productos por acabarse (semáforo visual).
 - Pedidos del período por estado.
-- **Costo de inventario (nuevo):** plata parada en depósito, valuada a PMP.
-- **Costo de consumo del período (nuevo):** plata consumida en el rango, valuada a PMP.
+- **Costo de inventario (nuevo):** plata parada en depósito — suma de partidas remanentes, cada una a su costo (FIFO).
+- **Costo de consumo del período (nuevo):** plata consumida en el rango, valuada por FIFO.
+- **Partidas remanentes por producto (nuevo — revisión FIFO):** fecha/tanda, proveedor, restante, costo unitario y subtotal, con stock y valor total al pie.
 - **Órdenes de compra abiertas (nuevo):** cuántas, cuánto falta, acceso a nueva orden.
 - Trazabilidad completa de cualquier producto, incluidos eventos PARTIDA y ORDEN.
 - Alertas por inconsistencias en los datos.
@@ -301,13 +350,13 @@ Banner naranja: "Sin conexión — mostrando datos guardados (última sync: hace
 - Detección automática de fugas (fuera de alcance — viene con recetas).
 - Desglose de pedidos por plataforma (v0.2 no lo captura — ver pregunta arriba).
 - Comparativas entre operarios.
-- Costo por partida individual (el costo va en la orden; la trazabilidad muestra la PARTIDA como cantidad, no como plata).
+- Plata en la trazabilidad de eventos: las filas de PARTIDA muestran cantidad, no costo. El costo por partida vive en la vista "Partidas por producto" (remanentes) y en la orden.
 
 ---
 
 ## Export
 
-Botón "descargar CSV" en la vista principal y en la trazabilidad. Descarga los datos del rango y vista actual. En v0.3 el CSV incluye las columnas de costo consumo y el PMP de cada producto.
+Botón "descargar CSV" en la vista principal y en la trazabilidad. Descarga los datos del rango y vista actual. En v0.3 el CSV incluye la columna de costo consumo (FIFO); desde la vista de partidas por producto, el CSV lista las partidas remanentes con restante, costo unitario y subtotal.
 
 > PREGUNTA A BACKEND: ¿el CSV debe respetar el modelo append-only mostrando correcciones como filas separadas con referencia al original, o entregar el "estado final" reconciliado? Asumo por auditoría: append-only, todas las filas, con columna de "corrige a" cuando aplique.
 
