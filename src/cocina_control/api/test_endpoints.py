@@ -36,3 +36,13 @@ async def _test_protected_admin_or_owner(
     Only registered when app_env != 'prod'.
     """
     return {"user_id": str(user.id), "role": user.role}
+
+
+@router.get("/_test/raise-exception", include_in_schema=False)
+async def _test_raise_exception() -> dict:
+    """Raises an uncaught exception — used to test the global exception handler.
+
+    Only registered when app_env != 'prod', so in production this path returns
+    a genuine 404. The specific error message must NOT appear in the HTTP response.
+    """
+    raise RuntimeError("test-only: this message must NOT leak to the client")

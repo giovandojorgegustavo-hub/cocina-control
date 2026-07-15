@@ -73,7 +73,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from cocina_control.api.deps import get_current_user, require_role
+from cocina_control.api.deps import get_current_user, require_any_role, require_role
 from cocina_control.db import get_session
 from cocina_control.models.inventory import InventoryCount, InventoryCountItem
 from cocina_control.models.product import Product
@@ -370,13 +370,13 @@ def get_count(
     "/{count_id}/items",
     response_model=InventoryItemResponseOperator,
     status_code=status.HTTP_201_CREATED,
-    summary="Register a product count in the session (operator only)",
+    summary="Register a product count in the session (cocinero or admin)",
 )
 def add_item(
     count_id: uuid.UUID,
     body: InventoryItemCreate,
     session: Session = Depends(get_session),
-    current_user: User = Depends(require_role("cocinero")),
+    current_user: User = Depends(require_any_role("cocinero", "admin")),
 ) -> InventoryItemResponseOperator:
     """Record the counted quantity for a product within a count session.
 
