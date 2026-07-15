@@ -1,15 +1,17 @@
 /**
- * Tests for formatRelativeDate via the bandeja rendering.
- * These tests inject deliveries with specific timestamps and verify the
+ * Tests for formatRelativeDate via the BandejaPartidas rendering (v0.3).
+ * These tests inject pending orders with specific timestamps and verify the
  * rendered output matches the expected relative date format.
+ *
+ * Migrated from v0.2 (used /api/v1/deliveries) to v0.3 (uses /api/v1/purchase-orders/pending).
  */
 import { test, expect } from '@playwright/test'
 import { makeTestJwt } from './helpers/testJwt'
 
-const DELIVERIES_URL = '**/api/v1/deliveries'
+const PENDING_URL = '**/api/v1/purchase-orders/pending'
 
-async function injectOperatorToken(page: import('@playwright/test').Page) {
-  const token = makeTestJwt('operator')
+async function injectCociToken(page: import('@playwright/test').Page) {
+  const token = makeTestJwt('cocinero')
   await page.goto('/login')
   await page.evaluate((t) => {
     sessionStorage.setItem('cocina-auth', JSON.stringify({ state: { token: t }, version: 0 }))
@@ -23,23 +25,23 @@ async function injectOperatorToken(page: import('@playwright/test').Page) {
 // ---------------------------------------------------------------------------
 
 test('test_format_relative_date_future_treats_as_today', async ({ page }) => {
-  await injectOperatorToken(page)
+  await injectCociToken(page)
 
   // Use a timestamp 2 days in the future from "now".
   // The test runs against a real browser, so we use a fixed far-future date.
   const futureIso = '2099-12-31T10:30:00Z'
 
-  await page.route(DELIVERIES_URL, (route) => {
+  await page.route(PENDING_URL, (route) => {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify([
         {
-          id: 'del-future',
+          id: 'ord-future',
           supplier_name: 'PROVEEDOR FUTURO',
-          status: 'no_leida',
-          item_count: 1,
           created_at: futureIso,
+          derived_status: 'open',
+          pending_items_summary: '1 producto · todo pendiente',
         },
       ]),
     })
@@ -51,7 +53,6 @@ test('test_format_relative_date_future_treats_as_today', async ({ page }) => {
   await expect(page.getByText('PROVEEDOR FUTURO')).toBeVisible()
 
   // The date must render as "hoy HH:mm" — specifically "hoy 07:30" (UTC-3 of 10:30Z)
-  // or "hoy XX:XX" — we check the "hoy" prefix to confirm future is treated as today
-  const row = page.getByRole('button', { name: /PROVEEDOR FUTURO/i })
+  const row = page.getByRole('button', { name: /Orden de PROVEEDOR FUTURO/i })
   await expect(row).toContainText('hoy 07:30')
 })

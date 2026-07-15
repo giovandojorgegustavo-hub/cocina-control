@@ -23,7 +23,7 @@ import { useAuthWithGetters } from '../lib/auth'
 import type { InventoryCountItem } from '../lib/types'
 
 // ---------------------------------------------------------------------------
-// Quantity validation — mirrors the guard in Verificacion.tsx
+// Quantity validation
 // ---------------------------------------------------------------------------
 
 function parseQty(raw: string): number | null {

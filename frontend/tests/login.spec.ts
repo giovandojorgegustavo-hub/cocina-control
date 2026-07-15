@@ -45,19 +45,20 @@ test('login success redirects owner to /tablero', async ({ page }) => {
   await expect(page).toHaveURL(/\/tablero/)
 })
 
-test('login success redirects operator to home /', async ({ page }) => {
-  const token = makeTestJwt('operator')
+// v0.3: 'operator' role no longer exists; 'cocinero' is the kitchen operator role.
+test('login success redirects cocinero to home /', async ({ page }) => {
+  const token = makeTestJwt('cocinero')
 
   await page.route(LOGIN_URL, (route) => {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ token, role: 'operator', user_id: 'test-user-id' }),
+      body: JSON.stringify({ token, role: 'cocinero', user_id: 'test-user-id' }),
     })
   })
 
   await page.goto('/login')
-  await page.getByLabel('Email').fill('operario@cocina.com')
+  await page.getByLabel('Email').fill('cocinero@cocina.com')
   await page.getByLabel('Contraseña').fill('password123')
   await page.getByRole('button', { name: 'Entrar' }).click()
 
@@ -103,20 +104,22 @@ test('login 429 shows rate limit message', async ({ page }) => {
 })
 
 // qa H-06 — unknown role from server shows error and clears token
+// Note: after PR #110, valid roles are 'cocinero', 'owner', 'admin'.
+// This test uses 'superadmin' as a truly unknown role.
 test('login unknown role shows error and does not navigate', async ({ page }) => {
-  const token = makeTestJwt('operator')
+  const token = makeTestJwt('owner') // any valid JWT for the helper
 
   await page.route(LOGIN_URL, (route) => {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      // 'admin' is not a valid role in this app
-      body: JSON.stringify({ token, role: 'admin', user_id: 'test-user-id' }),
+      // 'superadmin' is not a valid role in this app
+      body: JSON.stringify({ token, role: 'superadmin', user_id: 'test-user-id' }),
     })
   })
 
   await page.goto('/login')
-  await page.getByLabel('Email').fill('admin@cocina.com')
+  await page.getByLabel('Email').fill('superadmin@cocina.com')
   await page.getByLabel('Contraseña').fill('password123')
   await page.getByRole('button', { name: 'Entrar' }).click()
 
@@ -153,7 +156,7 @@ test('error banner clears when user edits email', async ({ page }) => {
 
 // qa H-03 — email normalized before sending
 test('login trims and lowercases email before sending', async ({ page }) => {
-  const token = makeTestJwt('operator')
+  const token = makeTestJwt('cocinero')
   let capturedBody: Record<string, unknown> | null = null
 
   await page.route(LOGIN_URL, async (route) => {
@@ -161,7 +164,7 @@ test('login trims and lowercases email before sending', async ({ page }) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ token, role: 'operator', user_id: 'test-user-id' }),
+      body: JSON.stringify({ token, role: 'cocinero', user_id: 'test-user-id' }),
     })
   })
 
@@ -180,7 +183,7 @@ test('login trims and lowercases email before sending', async ({ page }) => {
 // blocks the second call synchronously, before React can set loading=true.
 // We verify that exactly one HTTP request was intercepted.
 test('double submit only fires one request', async ({ page }) => {
-  const token = makeTestJwt('operator')
+  const token = makeTestJwt('cocinero')
   let requestCount = 0
 
   await page.route(LOGIN_URL, async (route) => {
@@ -190,7 +193,7 @@ test('double submit only fires one request', async ({ page }) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ token, role: 'operator', user_id: 'test-user-id' }),
+      body: JSON.stringify({ token, role: 'cocinero', user_id: 'test-user-id' }),
     })
   })
 
@@ -217,13 +220,13 @@ test('double submit only fires one request', async ({ page }) => {
 // ---------------------------------------------------------------------------
 
 test('token survives reload (sessionStorage persists within same tab)', async ({ page }) => {
-  const token = makeTestJwt('operator')
+  const token = makeTestJwt('cocinero')
 
   await page.route(LOGIN_URL, (route) => {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ token, role: 'operator', user_id: 'test-user-id' }),
+      body: JSON.stringify({ token, role: 'cocinero', user_id: 'test-user-id' }),
     })
   })
 
@@ -245,7 +248,7 @@ test('expired token in sessionStorage is cleared and user redirected to /login',
   const payload = btoa(
     JSON.stringify({
       sub: 'test-user-id',
-      role: 'operator',
+      role: 'cocinero',
       exp: Math.floor(Date.now() / 1000) - 1,
       iat: Math.floor(Date.now() / 1000) - 3601,
     }),
@@ -278,7 +281,7 @@ test('expired token in sessionStorage is cleared and user redirected to /login',
 // not the axios interceptor itself.
 test('clear token state redirects to /login via guard', async ({ page }) => {
   // Start with a valid token injected directly into sessionStorage
-  const token = makeTestJwt('operator')
+  const token = makeTestJwt('cocinero')
   await injectToken(page, token)
 
   // Simulate the axios 401 interceptor behavior: clear the token
@@ -305,7 +308,7 @@ test('clear token state redirects to /login via guard', async ({ page }) => {
 
 // qa H-05 — logout sends Authorization header
 test('logout clears token and redirects to /login', async ({ page }) => {
-  const testToken = makeTestJwt('operator')
+  const testToken = makeTestJwt('cocinero')
   let logoutAuthHeader: string | undefined
 
   await page.route(LOGOUT_URL, (route) => {
@@ -339,19 +342,19 @@ test('logout clears token and redirects to /login', async ({ page }) => {
 
 // qa H-10 — token in sessionStorage does not leak to a new browser context
 test('token does not leak to a new browser context', async ({ browser, page }) => {
-  const token = makeTestJwt('operator')
+  const token = makeTestJwt('cocinero')
 
   await page.route('**/api/v1/auth/login', (route) => {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ token, role: 'operator', user_id: 'test-user-id' }),
+      body: JSON.stringify({ token, role: 'cocinero', user_id: 'test-user-id' }),
     })
   })
 
   // Log in within the current page context
   await page.goto('/login')
-  await page.getByLabel('Email').fill('operario@cocina.com')
+  await page.getByLabel('Email').fill('cocinero@cocina.com')
   await page.getByLabel('Contraseña').fill('password123')
   await page.getByRole('button', { name: 'Entrar' }).click()
   await expect(page).toHaveURL(/\/$/)
@@ -382,4 +385,28 @@ test('offline before submit disables button', async ({ page, context }) => {
   await expect(page.getByRole('button', { name: 'Entrar' })).toBeDisabled()
 
   await context.setOffline(false)
+})
+
+// ---------------------------------------------------------------------------
+// test_admin_login_redirects_to_home (Fix 5 / QA-MEDIO 7)
+// ---------------------------------------------------------------------------
+
+test('test_admin_login_redirects_to_home', async ({ page }) => {
+  const token = makeTestJwt('admin')
+
+  await page.route(LOGIN_URL, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ token, role: 'admin', user_id: 'test-admin-id' }),
+    })
+  })
+
+  await page.goto('/login')
+  await page.getByLabel('Email').fill('admin@cocina.com')
+  await page.getByLabel('Contraseña').fill('password123')
+  await page.getByRole('button', { name: 'Entrar' }).click()
+
+  // Admin redirects to '/', not /tablero
+  await expect(page).toHaveURL(/\/$/)
 })

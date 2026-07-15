@@ -1,7 +1,8 @@
 import { test, expect } from '@playwright/test'
 import { makeTestJwt } from './helpers/testJwt'
 
-const DELIVERIES_URL = '**/api/v1/deliveries'
+// v0.3: /entradas now uses purchase-orders/pending (not /deliveries)
+const PENDING_URL = '**/api/v1/purchase-orders/pending'
 const LOGOUT_URL = '**/api/v1/auth/logout'
 
 async function injectToken(page: import('@playwright/test').Page, role: 'operator' | 'owner') {
@@ -56,8 +57,8 @@ test('test_home_button_touch_target_min_48px', async ({ page }) => {
 test('test_entrada_button_navigates_to_bandeja', async ({ page }) => {
   await injectToken(page, 'operator')
 
-  // Mock GET /deliveries to return empty list so Bandeja renders without error
-  await page.route(DELIVERIES_URL, (route) => {
+  // Mock GET /purchase-orders/pending to return empty list so BandejaPartidas renders
+  await page.route(PENDING_URL, (route) => {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -85,13 +86,15 @@ test('test_operator_home_shows_logout', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// test_owner_visiting_home_is_redirected_to_tablero
+// test_owner_visiting_home_redirected_to_tablero
+// The guard on '/' is RequireAnyRole(['cocinero', 'admin']).
+// Owner visiting '/' is redirected to '/tablero'.
 // ---------------------------------------------------------------------------
 
-test('test_owner_visiting_home_is_redirected_to_tablero', async ({ page }) => {
+test('test_owner_visiting_home_redirected_to_tablero', async ({ page }) => {
   await injectToken(page, 'owner')
 
-  // Navigate to / as an owner — RequireRole should redirect to /tablero
+  // Navigate to / as an owner — must be redirected to /tablero
   await page.goto('/')
 
   await expect(page).toHaveURL(/\/tablero/)
@@ -209,17 +212,17 @@ test('test_home_button_touch_target_min_100px', async ({ page }) => {
 test('test_logout_clears_query_cache', async ({ page }) => {
   await injectToken(page, 'operator')
 
-  await page.route(DELIVERIES_URL, (route) => {
+  await page.route(PENDING_URL, (route) => {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify([
         {
-          id: 'del-secret',
+          id: 'ord-secret',
           supplier_name: 'DATOS PRIVADOS SA',
-          status: 'no_leida',
-          item_count: 1,
           created_at: '2020-06-01T10:00:00Z',
+          derived_status: 'open',
+          pending_items_summary: '1 producto · todo pendiente',
         },
       ]),
     })
@@ -251,4 +254,22 @@ test('test_logout_clears_query_cache', async ({ page }) => {
   const authState = cachedData ? JSON.parse(cachedData) : null
   const token = authState?.state?.token ?? null
   expect(token).toBeNull()
+})
+
+// ---------------------------------------------------------------------------
+// test_admin_visiting_home_sees_nueva_orden_button (Fix 5 / QA-MEDIO 6)
+// ---------------------------------------------------------------------------
+
+test('test_admin_visiting_home_sees_nueva_orden_button', async ({ page }) => {
+  const adminToken = makeTestJwt('admin')
+  await page.goto('/login')
+  await page.evaluate((t) => {
+    sessionStorage.setItem('cocina-auth', JSON.stringify({ state: { token: t }, version: 0 }))
+  }, adminToken)
+
+  await page.goto('/')
+
+  // Admin lands on home (not /tablero) and sees the NUEVA ORDEN button
+  await expect(page).toHaveURL('/')
+  await expect(page.getByRole('button', { name: /NUEVA ORDEN/i })).toBeVisible()
 })

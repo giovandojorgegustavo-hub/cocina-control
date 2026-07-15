@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { useAuthWithGetters } from '../lib/auth'
 import { apiClient } from '../lib/api'
@@ -466,6 +466,12 @@ export function Tablero() {
         <h1 className="text-lg font-bold tracking-wide">Cocina Control — Tablero</h1>
         <div className="flex items-center gap-4">
           <span className="text-sm text-gray-300">{userId ?? 'dueno'}</span>
+          <Link
+            to="/ordenes/nueva"
+            className="min-h-[48px] px-4 flex items-center justify-center bg-white text-gray-900 text-sm font-bold uppercase tracking-wide active:opacity-70"
+          >
+            nueva orden
+          </Link>
           <button
             onClick={handleLogout}
             className="min-h-[48px] min-w-[48px] px-4 text-sm text-gray-300 underline"

@@ -25,7 +25,7 @@ export function Login() {
 
   // Redirect if already authenticated
   useEffect(() => {
-    if (role === 'operator') navigate('/', { replace: true })
+    if (role === 'cocinero' || role === 'admin') navigate('/', { replace: true })
     else if (role === 'owner') navigate('/tablero', { replace: true })
   }, [role, navigate])
 
@@ -60,14 +60,14 @@ export function Login() {
         password,
       })
 
-      if (data.role !== 'operator' && data.role !== 'owner') {
+      if (data.role !== 'cocinero' && data.role !== 'owner' && data.role !== 'admin') {
         clearToken()
         setError('other')
         return
       }
 
       setToken(data.token)
-      navigate(data.role === 'operator' ? '/' : '/tablero', { replace: true })
+      navigate(data.role === 'owner' ? '/tablero' : '/', { replace: true })
     } catch (err: unknown) {
       if (!navigator.onLine) {
         setError('offline')
