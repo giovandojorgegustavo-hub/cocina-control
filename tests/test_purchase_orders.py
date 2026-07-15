@@ -418,18 +418,18 @@ def test_purchase_order_status_event_types(db_session: Session, owner_user):
 # ---------------------------------------------------------------------------
 
 
-def test_delivery_partida_link_to_purchase_order(db_session: Session, owner_user, operator_user):
+def test_delivery_partida_link_to_purchase_order(db_session: Session, owner_user, cocinero_user):
     """A delivery (partida) linked to a PO and a delivery_item linked to a PO item."""
     po_id = _make_purchase_order(db_session, created_by=owner_user.id)
     product_id = _make_product(db_session, owner_user.id)
     po_item_id = _make_po_item(db_session, po_id, product_id, owner_user.id)
 
-    delivery_id = _make_delivery(db_session, created_by=operator_user.id, purchase_order_id=po_id)
+    delivery_id = _make_delivery(db_session, created_by=cocinero_user.id, purchase_order_id=po_id)
     di_id = _make_delivery_item(
         db_session,
         delivery_id=delivery_id,
         product_id=product_id,
-        created_by=operator_user.id,
+        created_by=cocinero_user.id,
         announced_qty=Decimal("5"),
         purchase_order_item_id=po_item_id,
     )
@@ -448,16 +448,16 @@ def test_delivery_partida_link_to_purchase_order(db_session: Session, owner_user
 # ---------------------------------------------------------------------------
 
 
-def test_delivery_legacy_v02_still_works(db_session: Session, operator_user):
+def test_delivery_legacy_v02_still_works(db_session: Session, cocinero_user):
     """Legacy deliveries with NULL purchase_order_id and NULL purchase_order_item_id must still work."""
-    product_id = _make_product(db_session, operator_user.id)
+    product_id = _make_product(db_session, cocinero_user.id)
 
-    delivery_id = _make_delivery(db_session, created_by=operator_user.id, purchase_order_id=None)
+    delivery_id = _make_delivery(db_session, created_by=cocinero_user.id, purchase_order_id=None)
     di_id = _make_delivery_item(
         db_session,
         delivery_id=delivery_id,
         product_id=product_id,
-        created_by=operator_user.id,
+        created_by=cocinero_user.id,
         purchase_order_item_id=None,
     )
 
@@ -557,31 +557,31 @@ def _make_po_item_cost(
 # ---------------------------------------------------------------------------
 
 
-def test_status_event_closed_manual_requires_owner(db_session: Session, owner_user, operator_user):
-    """closed_manual with an operator created_by must be rejected by the DB trigger.
+def test_status_event_closed_manual_requires_owner(db_session: Session, owner_user, cocinero_user):
+    """closed_manual with a cocinero created_by must be rejected by the DB trigger.
 
-    closed_auto with an operator must succeed — no role restriction for auto-closes.
+    closed_auto with a cocinero must succeed — no role restriction for auto-closes.
     """
     from cocina_control.models.purchase_order import PurchaseOrderStatusEvent
 
     po_id = _make_purchase_order(db_session, created_by=owner_user.id)
 
-    # closed_auto with operator must succeed.
+    # closed_auto with cocinero must succeed.
     event_auto = PurchaseOrderStatusEvent(
         id=uuid.uuid4(),
         purchase_order_id=po_id,
         event_type="closed_auto",
-        created_by=operator_user.id,
+        created_by=cocinero_user.id,
     )
     db_session.add(event_auto)
     db_session.flush()  # must not raise
 
-    # closed_manual with operator must fail.
+    # closed_manual with cocinero must fail.
     event_manual = PurchaseOrderStatusEvent(
         id=uuid.uuid4(),
         purchase_order_id=po_id,
         event_type="closed_manual",
-        created_by=operator_user.id,
+        created_by=cocinero_user.id,
     )
     db_session.add(event_manual)
     with pytest.raises((IntegrityError, InternalError, ProgrammingError)):
@@ -594,8 +594,8 @@ def test_status_event_closed_manual_requires_owner(db_session: Session, owner_us
 # ---------------------------------------------------------------------------
 
 
-def test_status_event_reopened_requires_owner(db_session: Session, owner_user, operator_user):
-    """reopened with an operator created_by must be rejected by the DB trigger."""
+def test_status_event_reopened_requires_owner(db_session: Session, owner_user, cocinero_user):
+    """reopened with a cocinero created_by must be rejected by the DB trigger."""
     from cocina_control.models.purchase_order import PurchaseOrderStatusEvent
 
     po_id = _make_purchase_order(db_session, created_by=owner_user.id)
@@ -604,7 +604,7 @@ def test_status_event_reopened_requires_owner(db_session: Session, owner_user, o
         id=uuid.uuid4(),
         purchase_order_id=po_id,
         event_type="reopened",
-        created_by=operator_user.id,
+        created_by=cocinero_user.id,
     )
     db_session.add(event)
     with pytest.raises((IntegrityError, InternalError, ProgrammingError)):
@@ -617,8 +617,8 @@ def test_status_event_reopened_requires_owner(db_session: Session, owner_user, o
 # ---------------------------------------------------------------------------
 
 
-def test_status_event_annulled_requires_owner(db_session: Session, owner_user, operator_user):
-    """annulled with an operator created_by must be rejected by the DB trigger."""
+def test_status_event_annulled_requires_owner(db_session: Session, owner_user, cocinero_user):
+    """annulled with a cocinero created_by must be rejected by the DB trigger."""
     from cocina_control.models.purchase_order import PurchaseOrderStatusEvent
 
     po_id = _make_purchase_order(db_session, created_by=owner_user.id)
@@ -627,7 +627,7 @@ def test_status_event_annulled_requires_owner(db_session: Session, owner_user, o
         id=uuid.uuid4(),
         purchase_order_id=po_id,
         event_type="annulled",
-        created_by=operator_user.id,
+        created_by=cocinero_user.id,
     )
     db_session.add(event)
     with pytest.raises((IntegrityError, InternalError, ProgrammingError)):
@@ -640,14 +640,14 @@ def test_status_event_annulled_requires_owner(db_session: Session, owner_user, o
 # ---------------------------------------------------------------------------
 
 
-def test_purchase_order_created_by_operator_rejected(db_session: Session, operator_user):
-    """PurchaseOrder with created_by=operator must be rejected by the DB trigger."""
+def test_purchase_order_created_by_cocinero_rejected(db_session: Session, cocinero_user):
+    """PurchaseOrder with created_by=cocinero must be rejected by the DB trigger."""
     from cocina_control.models.purchase_order import PurchaseOrder
 
     po = PurchaseOrder(
         id=uuid.uuid4(),
         supplier_name="Proveedor Ilegal",
-        created_by=operator_user.id,
+        created_by=cocinero_user.id,
     )
     db_session.add(po)
     with pytest.raises((IntegrityError, InternalError, ProgrammingError)):
@@ -660,10 +660,10 @@ def test_purchase_order_created_by_operator_rejected(db_session: Session, operat
 # ---------------------------------------------------------------------------
 
 
-def test_purchase_order_item_created_by_operator_rejected(
-    db_session: Session, owner_user, operator_user
+def test_purchase_order_item_created_by_cocinero_rejected(
+    db_session: Session, owner_user, cocinero_user
 ):
-    """PurchaseOrderItem with created_by=operator must be rejected by the DB trigger."""
+    """PurchaseOrderItem with created_by=cocinero must be rejected by the DB trigger."""
     from cocina_control.models.purchase_order import PurchaseOrderItem
 
     po_id = _make_purchase_order(db_session, created_by=owner_user.id)
@@ -674,7 +674,7 @@ def test_purchase_order_item_created_by_operator_rejected(
         purchase_order_id=po_id,
         product_id=product_id,
         expected_qty=Decimal("5"),
-        created_by=operator_user.id,
+        created_by=cocinero_user.id,
     )
     db_session.add(item)
     with pytest.raises((IntegrityError, InternalError, ProgrammingError)):
@@ -687,13 +687,13 @@ def test_purchase_order_item_created_by_operator_rejected(
 # ---------------------------------------------------------------------------
 
 
-def test_purchase_order_item_cost_created_by_operator_rejected(
-    db_session: Session, owner_user, operator_user
+def test_purchase_order_item_cost_created_by_cocinero_rejected(
+    db_session: Session, owner_user, cocinero_user
 ):
-    """PurchaseOrderItemCost with created_by=operator must be rejected by the DB trigger.
+    """PurchaseOrderItemCost with created_by=cocinero must be rejected by the DB trigger.
 
-    This is the most critical SEG-A2 case: cost records are exclusively owner data
-    and must never be writable by an operator, even if the app layer is bypassed.
+    This is the most critical case: cost records are exclusively owner/admin data
+    and must never be writable by a cocinero, even if the app layer is bypassed.
     """
     po_id = _make_purchase_order(db_session, created_by=owner_user.id)
     product_id = _make_product(db_session, owner_user.id)
@@ -705,7 +705,7 @@ def test_purchase_order_item_cost_created_by_operator_rejected(
         id=uuid.uuid4(),
         purchase_order_item_id=item_id,
         unit_cost=Decimal("15.00"),
-        created_by=operator_user.id,
+        created_by=cocinero_user.id,
     )
     db_session.add(cost)
     with pytest.raises((IntegrityError, InternalError, ProgrammingError)):
@@ -773,3 +773,151 @@ def test_purchase_order_items_chain_leaf_identification(db_session: Session, own
     ).fetchall()
     leaf_ids = {row[0] for row in leaf_rows}
     assert leaf_ids == {c_id}, f"Expected only leaf C, got: {leaf_ids}"
+
+
+# ---------------------------------------------------------------------------
+# Tests 22-29: three-role model (Backend #2 — 0013_three_roles)
+# ---------------------------------------------------------------------------
+
+
+def test_purchase_order_admin_can_create(db_session: Session, admin_user):
+    """A user with role='admin' must be allowed to create a PurchaseOrder (trigger allows owner/admin)."""
+    po_id = _make_purchase_order(db_session, created_by=admin_user.id)
+
+    from cocina_control.models.purchase_order import PurchaseOrder
+
+    po = db_session.get(PurchaseOrder, po_id)
+    assert po is not None
+    assert po.created_by == admin_user.id
+
+
+def test_purchase_order_item_admin_can_create(db_session: Session, owner_user, admin_user):
+    """A user with role='admin' must be allowed to create a PurchaseOrderItem."""
+    po_id = _make_purchase_order(db_session, created_by=owner_user.id)
+    product_id = _make_product(db_session, owner_user.id)
+
+    item_id = _make_po_item(db_session, po_id, product_id, admin_user.id)
+
+    from cocina_control.models.purchase_order import PurchaseOrderItem
+
+    item = db_session.get(PurchaseOrderItem, item_id)
+    assert item is not None
+    assert item.created_by == admin_user.id
+
+
+def test_purchase_order_item_cost_admin_can_create(db_session: Session, owner_user, admin_user):
+    """A user with role='admin' must be allowed to create a PurchaseOrderItemCost."""
+    po_id = _make_purchase_order(db_session, created_by=owner_user.id)
+    product_id = _make_product(db_session, owner_user.id)
+    item_id = _make_po_item(db_session, po_id, product_id, owner_user.id)
+
+    cost_id = _make_po_item_cost(db_session, item_id, admin_user.id)
+
+    from cocina_control.models.purchase_order import PurchaseOrderItemCost
+
+    cost = db_session.get(PurchaseOrderItemCost, cost_id)
+    assert cost is not None
+    assert cost.created_by == admin_user.id
+
+
+def test_purchase_order_cocinero_still_rejected(db_session: Session, cocinero_user):
+    """Cocinero (ex-operator) must still be rejected when creating a PurchaseOrder."""
+    from cocina_control.models.purchase_order import PurchaseOrder
+
+    po = PurchaseOrder(
+        id=uuid.uuid4(),
+        supplier_name="Proveedor Ilegal",
+        created_by=cocinero_user.id,
+    )
+    db_session.add(po)
+    with pytest.raises((IntegrityError, InternalError, ProgrammingError)):
+        with db_session.begin_nested():
+            db_session.flush()
+
+
+def test_status_event_closed_manual_admin_ok(db_session: Session, owner_user, admin_user):
+    """closed_manual with admin created_by must be accepted by the updated DB trigger."""
+    from cocina_control.models.purchase_order import PurchaseOrderStatusEvent
+
+    po_id = _make_purchase_order(db_session, created_by=owner_user.id)
+
+    event = PurchaseOrderStatusEvent(
+        id=uuid.uuid4(),
+        purchase_order_id=po_id,
+        event_type="closed_manual",
+        created_by=admin_user.id,
+    )
+    db_session.add(event)
+    db_session.flush()  # must not raise
+
+    from cocina_control.models.purchase_order import PurchaseOrderStatusEvent as PSE
+
+    persisted = db_session.get(PSE, event.id)
+    assert persisted is not None
+    assert persisted.event_type == "closed_manual"
+
+
+def test_status_event_reopened_admin_ok(db_session: Session, owner_user, admin_user):
+    """reopened with admin created_by must be accepted by the updated DB trigger."""
+    from cocina_control.models.purchase_order import PurchaseOrderStatusEvent
+
+    po_id = _make_purchase_order(db_session, created_by=owner_user.id)
+
+    event = PurchaseOrderStatusEvent(
+        id=uuid.uuid4(),
+        purchase_order_id=po_id,
+        event_type="reopened",
+        created_by=admin_user.id,
+    )
+    db_session.add(event)
+    db_session.flush()  # must not raise
+
+    from cocina_control.models.purchase_order import PurchaseOrderStatusEvent as PSE
+
+    persisted = db_session.get(PSE, event.id)
+    assert persisted is not None
+    assert persisted.event_type == "reopened"
+
+
+def test_status_event_annulled_admin_ok(db_session: Session, owner_user, admin_user):
+    """annulled with admin created_by must be accepted by the updated DB trigger."""
+    from cocina_control.models.purchase_order import PurchaseOrderStatusEvent
+
+    po_id = _make_purchase_order(db_session, created_by=owner_user.id)
+
+    event = PurchaseOrderStatusEvent(
+        id=uuid.uuid4(),
+        purchase_order_id=po_id,
+        event_type="annulled",
+        created_by=admin_user.id,
+    )
+    db_session.add(event)
+    db_session.flush()  # must not raise
+
+    from cocina_control.models.purchase_order import PurchaseOrderStatusEvent as PSE
+
+    persisted = db_session.get(PSE, event.id)
+    assert persisted is not None
+    assert persisted.event_type == "annulled"
+
+
+def test_status_event_closed_auto_cocinero_ok(db_session: Session, owner_user, cocinero_user):
+    """closed_auto with cocinero created_by must still be accepted (no role restriction on auto-close)."""
+    from cocina_control.models.purchase_order import PurchaseOrderStatusEvent
+
+    po_id = _make_purchase_order(db_session, created_by=owner_user.id)
+
+    event = PurchaseOrderStatusEvent(
+        id=uuid.uuid4(),
+        purchase_order_id=po_id,
+        event_type="closed_auto",
+        created_by=cocinero_user.id,
+    )
+    db_session.add(event)
+    db_session.flush()  # must not raise
+
+    from cocina_control.models.purchase_order import PurchaseOrderStatusEvent as PSE
+
+    persisted = db_session.get(PSE, event.id)
+    assert persisted is not None
+    assert persisted.event_type == "closed_auto"

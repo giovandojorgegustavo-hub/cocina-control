@@ -1,6 +1,6 @@
 """Integration tests for the product catalogue endpoints.
 
-All fixtures (owner_user, operator_user, owner_token, operator_token, client,
+All fixtures (owner_user, cocinero_user, owner_token, cocinero_token, client,
 db_session) are provided by conftest.py.
 
 Every test runs inside a SAVEPOINT that is rolled back after the test, so
@@ -125,13 +125,13 @@ async def test_create_product_owner_success(
 @pytest.mark.asyncio
 async def test_create_product_operator_returns_403(
     client: AsyncClient,
-    operator_token: str,
+    cocinero_token: str,
 ) -> None:
     """Operator cannot create products — must receive 403."""
     response = await client.post(
         "/api/v1/products",
         json={"name": "pollo", "unit": "kg"},
-        headers={"Authorization": f"Bearer {operator_token}"},
+        headers={"Authorization": f"Bearer {cocinero_token}"},
     )
     assert response.status_code == 403
 
@@ -339,7 +339,7 @@ async def test_patch_product_operator_returns_403(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_token: str,
+    cocinero_token: str,
 ) -> None:
     """Operator cannot patch products."""
     product = _make_product(db_session, owner_user.id, "ACEITE")
@@ -347,7 +347,7 @@ async def test_patch_product_operator_returns_403(
     response = await client.patch(
         f"/api/v1/products/{product.id}",
         json={"unit": "lt"},
-        headers={"Authorization": f"Bearer {operator_token}"},
+        headers={"Authorization": f"Bearer {cocinero_token}"},
     )
     assert response.status_code == 403
 
@@ -369,7 +369,7 @@ async def test_patch_nonexistent_product_returns_404(
 @pytest.mark.asyncio
 async def test_patch_operator_on_nonexistent_returns_403(
     client: AsyncClient,
-    operator_token: str,
+    cocinero_token: str,
 ) -> None:
     """Operator hitting PATCH on a non-existent product gets 403, not 404.
 
@@ -379,7 +379,7 @@ async def test_patch_operator_on_nonexistent_returns_403(
     response = await client.patch(
         f"/api/v1/products/{uuid.uuid4()}",
         json={"unit": "kg"},
-        headers={"Authorization": f"Bearer {operator_token}"},
+        headers={"Authorization": f"Bearer {cocinero_token}"},
     )
     assert response.status_code == 403
 
@@ -458,14 +458,14 @@ async def test_delete_product_operator_returns_403(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_token: str,
+    cocinero_token: str,
 ) -> None:
     """Operator cannot delete (deactivate) products."""
     product = _make_product(db_session, owner_user.id, "SAL")
 
     response = await client.delete(
         f"/api/v1/products/{product.id}",
-        headers={"Authorization": f"Bearer {operator_token}"},
+        headers={"Authorization": f"Bearer {cocinero_token}"},
     )
     assert response.status_code == 403
 
@@ -486,7 +486,7 @@ async def test_delete_nonexistent_product_returns_404(
 @pytest.mark.asyncio
 async def test_delete_operator_on_nonexistent_returns_403(
     client: AsyncClient,
-    operator_token: str,
+    cocinero_token: str,
 ) -> None:
     """Operator hitting DELETE on a non-existent product gets 403, not 404.
 
@@ -495,7 +495,7 @@ async def test_delete_operator_on_nonexistent_returns_403(
     """
     response = await client.delete(
         f"/api/v1/products/{uuid.uuid4()}",
-        headers={"Authorization": f"Bearer {operator_token}"},
+        headers={"Authorization": f"Bearer {cocinero_token}"},
     )
     assert response.status_code == 403
 

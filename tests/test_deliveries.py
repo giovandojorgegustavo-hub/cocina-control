@@ -4,7 +4,7 @@ Covers POST / GET (list) / GET (detail) / PATCH on /api/v1/deliveries (issue #10
 and open / confirm / validate / correct (issue #11).
 
 Fixtures inherited from conftest.py:
-  owner_user, operator_user, owner_token, operator_token,
+  owner_user, cocinero_user, owner_token, cocinero_token,
   client, db_session.
 """
 
@@ -165,7 +165,7 @@ async def test_created_delivery_status_is_no_leida(
 @pytest.mark.asyncio
 async def test_operator_cannot_create_delivery_403(
     client: AsyncClient,
-    operator_token: str,
+    cocinero_token: str,
     active_products: list[Product],
 ) -> None:
     """Operator cannot pre-load a delivery — must receive 403."""
@@ -176,7 +176,7 @@ async def test_operator_cannot_create_delivery_403(
             "supplier_name": "X",
             "items": [{"product_id": str(p1.id), "announced_qty": "1"}],
         },
-        headers={"Authorization": f"Bearer {operator_token}"},
+        headers={"Authorization": f"Bearer {cocinero_token}"},
     )
     assert response.status_code == 403
 
@@ -319,12 +319,12 @@ async def test_list_deliveries_operator_and_owner_both_see(
     db_session: Session,
     owner_user,
     owner_token: str,
-    operator_token: str,
+    cocinero_token: str,
 ) -> None:
     """Both owner and operator can list deliveries."""
     _make_delivery(db_session, owner_user.id, supplier_name="Proveedor Lista")
 
-    for token in (owner_token, operator_token):
+    for token in (owner_token, cocinero_token):
         response = await client.get(
             "/api/v1/deliveries",
             headers={"Authorization": f"Bearer {token}"},
@@ -581,7 +581,7 @@ async def test_operator_cannot_edit_403(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_token: str,
+    cocinero_token: str,
 ) -> None:
     """Operator cannot PATCH a delivery — must receive 403."""
     delivery = _make_delivery(db_session, owner_user.id)
@@ -589,7 +589,7 @@ async def test_operator_cannot_edit_403(
     response = await client.patch(
         f"/api/v1/deliveries/{delivery.id}",
         json={"supplier_name": "Operario Intruso"},
-        headers={"Authorization": f"Bearer {operator_token}"},
+        headers={"Authorization": f"Bearer {cocinero_token}"},
     )
     assert response.status_code == 403
 
@@ -827,11 +827,11 @@ async def test_patch_no_change_returns_current(
 
 
 async def _open_delivery(
-    client: AsyncClient, delivery_id: uuid.UUID, operator_token: str
+    client: AsyncClient, delivery_id: uuid.UUID, cocinero_token: str
 ) -> dict:
     r = await client.post(
         f"/api/v1/deliveries/{delivery_id}/open",
-        headers={"Authorization": f"Bearer {operator_token}"},
+        headers={"Authorization": f"Bearer {cocinero_token}"},
     )
     return r
 
@@ -841,21 +841,21 @@ async def _confirm_item(
     delivery_id: uuid.UUID,
     item_id: uuid.UUID,
     qty: str,
-    operator_token: str,
+    cocinero_token: str,
 ):
     return await client.post(
         f"/api/v1/deliveries/{delivery_id}/items/{item_id}/confirm",
         json={"received_qty": qty},
-        headers={"Authorization": f"Bearer {operator_token}"},
+        headers={"Authorization": f"Bearer {cocinero_token}"},
     )
 
 
 async def _validate_delivery(
-    client: AsyncClient, delivery_id: uuid.UUID, operator_token: str
+    client: AsyncClient, delivery_id: uuid.UUID, cocinero_token: str
 ):
     return await client.post(
         f"/api/v1/deliveries/{delivery_id}/validate",
-        headers={"Authorization": f"Bearer {operator_token}"},
+        headers={"Authorization": f"Bearer {cocinero_token}"},
     )
 
 
@@ -869,8 +869,8 @@ async def test_operator_opens_delivery_status_transitions(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_user,
-    operator_token: str,
+    cocinero_user,
+    cocinero_token: str,
     active_products: list[Product],
 ) -> None:
     """Happy path: operator opens a no_leida delivery → en_verificacion."""
@@ -878,7 +878,7 @@ async def test_operator_opens_delivery_status_transitions(
     delivery = _make_delivery(db_session, owner_user.id, status="no_leida")
     _make_delivery_item(db_session, delivery, p1, owner_user.id)
 
-    r = await _open_delivery(client, delivery.id, operator_token)
+    r = await _open_delivery(client, delivery.id, cocinero_token)
 
     assert r.status_code == 200
     data = r.json()
@@ -891,7 +891,7 @@ async def test_operator_opens_delivery_status_transitions(
     db_session.expire_all()
     fresh = db_session.get(Delivery, delivery.id)
     assert fresh.status == "en_verificacion"
-    assert fresh.updated_by == operator_user.id
+    assert fresh.updated_by == cocinero_user.id
     assert fresh.updated_at is not None
 
 
@@ -900,7 +900,7 @@ async def test_operator_open_already_opened_returns_409(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_token: str,
+    cocinero_token: str,
     active_products: list[Product],
 ) -> None:
     """Opening an already-open delivery returns 409."""
@@ -908,7 +908,7 @@ async def test_operator_open_already_opened_returns_409(
     delivery = _make_delivery(db_session, owner_user.id, status="en_verificacion")
     _make_delivery_item(db_session, delivery, p1, owner_user.id)
 
-    r = await _open_delivery(client, delivery.id, operator_token)
+    r = await _open_delivery(client, delivery.id, cocinero_token)
 
     assert r.status_code == 409
     assert "already open" in r.json()["detail"].lower()
@@ -919,7 +919,7 @@ async def test_operator_open_validated_returns_409(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_token: str,
+    cocinero_token: str,
     active_products: list[Product],
 ) -> None:
     """Opening a validated delivery returns 409."""
@@ -927,7 +927,7 @@ async def test_operator_open_validated_returns_409(
     delivery = _make_delivery(db_session, owner_user.id, status="validada")
     _make_delivery_item(db_session, delivery, p1, owner_user.id)
 
-    r = await _open_delivery(client, delivery.id, operator_token)
+    r = await _open_delivery(client, delivery.id, cocinero_token)
 
     assert r.status_code == 409
     assert "already validated" in r.json()["detail"].lower()
@@ -936,10 +936,10 @@ async def test_operator_open_validated_returns_409(
 @pytest.mark.asyncio
 async def test_operator_open_nonexistent_returns_404(
     client: AsyncClient,
-    operator_token: str,
+    cocinero_token: str,
 ) -> None:
     """Opening a non-existent delivery returns 404."""
-    r = await _open_delivery(client, uuid.uuid4(), operator_token)
+    r = await _open_delivery(client, uuid.uuid4(), cocinero_token)
     assert r.status_code == 404
 
 
@@ -970,7 +970,7 @@ async def test_operator_confirms_item_with_announced_qty(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_token: str,
+    cocinero_token: str,
     active_products: list[Product],
 ) -> None:
     """Confirming with the announced qty: received_qty == announced_qty."""
@@ -978,7 +978,7 @@ async def test_operator_confirms_item_with_announced_qty(
     delivery = _make_delivery(db_session, owner_user.id, status="en_verificacion")
     item = _make_delivery_item(db_session, delivery, p1, owner_user.id, "10")
 
-    r = await _confirm_item(client, delivery.id, item.id, "10", operator_token)
+    r = await _confirm_item(client, delivery.id, item.id, "10", cocinero_token)
 
     assert r.status_code == 200
     data = r.json()
@@ -991,7 +991,7 @@ async def test_operator_confirms_item_with_different_qty(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_token: str,
+    cocinero_token: str,
     active_products: list[Product],
 ) -> None:
     """Confirming with a different qty (announced 10, received 8)."""
@@ -999,7 +999,7 @@ async def test_operator_confirms_item_with_different_qty(
     delivery = _make_delivery(db_session, owner_user.id, status="en_verificacion")
     item = _make_delivery_item(db_session, delivery, p1, owner_user.id, "10")
 
-    r = await _confirm_item(client, delivery.id, item.id, "8", operator_token)
+    r = await _confirm_item(client, delivery.id, item.id, "8", cocinero_token)
 
     assert r.status_code == 200
     assert r.json()["received_qty"] == "8"
@@ -1016,7 +1016,7 @@ async def test_operator_confirms_item_zero_qty(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_token: str,
+    cocinero_token: str,
     active_products: list[Product],
 ) -> None:
     """Confirming with qty = 0 (product did not arrive) is valid."""
@@ -1024,7 +1024,7 @@ async def test_operator_confirms_item_zero_qty(
     delivery = _make_delivery(db_session, owner_user.id, status="en_verificacion")
     item = _make_delivery_item(db_session, delivery, p1, owner_user.id, "10")
 
-    r = await _confirm_item(client, delivery.id, item.id, "0", operator_token)
+    r = await _confirm_item(client, delivery.id, item.id, "0", cocinero_token)
 
     assert r.status_code == 200
     assert r.json()["received_qty"] == "0"
@@ -1035,7 +1035,7 @@ async def test_operator_confirms_item_negative_returns_422(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_token: str,
+    cocinero_token: str,
     active_products: list[Product],
 ) -> None:
     """received_qty < 0 is rejected by Pydantic (ge=0) → 422."""
@@ -1046,7 +1046,7 @@ async def test_operator_confirms_item_negative_returns_422(
     r = await client.post(
         f"/api/v1/deliveries/{delivery.id}/items/{item.id}/confirm",
         json={"received_qty": "-1"},
-        headers={"Authorization": f"Bearer {operator_token}"},
+        headers={"Authorization": f"Bearer {cocinero_token}"},
     )
     assert r.status_code == 422
 
@@ -1056,7 +1056,7 @@ async def test_confirm_before_open_returns_409(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_token: str,
+    cocinero_token: str,
     active_products: list[Product],
 ) -> None:
     """Confirming an item on a no_leida delivery returns 409."""
@@ -1064,7 +1064,7 @@ async def test_confirm_before_open_returns_409(
     delivery = _make_delivery(db_session, owner_user.id, status="no_leida")
     item = _make_delivery_item(db_session, delivery, p1, owner_user.id, "10")
 
-    r = await _confirm_item(client, delivery.id, item.id, "10", operator_token)
+    r = await _confirm_item(client, delivery.id, item.id, "10", cocinero_token)
 
     assert r.status_code == 409
     assert "open" in r.json()["detail"].lower()
@@ -1075,7 +1075,7 @@ async def test_confirm_after_validate_returns_409(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_token: str,
+    cocinero_token: str,
     active_products: list[Product],
 ) -> None:
     """Confirming an item on a validated delivery returns 409."""
@@ -1083,7 +1083,7 @@ async def test_confirm_after_validate_returns_409(
     delivery = _make_delivery(db_session, owner_user.id, status="validada")
     item = _make_delivery_item(db_session, delivery, p1, owner_user.id, "10", received_qty="10")
 
-    r = await _confirm_item(client, delivery.id, item.id, "10", operator_token)
+    r = await _confirm_item(client, delivery.id, item.id, "10", cocinero_token)
 
     assert r.status_code == 409
     assert "validated" in r.json()["detail"].lower()
@@ -1094,7 +1094,7 @@ async def test_confirm_idempotent_same_qty_returns_200(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_token: str,
+    cocinero_token: str,
     active_products: list[Product],
 ) -> None:
     """Confirming with the same qty a second time is idempotent → 200."""
@@ -1103,11 +1103,11 @@ async def test_confirm_idempotent_same_qty_returns_200(
     item = _make_delivery_item(db_session, delivery, p1, owner_user.id, "10")
 
     # First confirm.
-    r1 = await _confirm_item(client, delivery.id, item.id, "8", operator_token)
+    r1 = await _confirm_item(client, delivery.id, item.id, "8", cocinero_token)
     assert r1.status_code == 200
 
     # Second confirm — same qty → idempotent.
-    r2 = await _confirm_item(client, delivery.id, item.id, "8", operator_token)
+    r2 = await _confirm_item(client, delivery.id, item.id, "8", cocinero_token)
     assert r2.status_code == 200
     assert r2.json()["received_qty"] == "8"
 
@@ -1117,7 +1117,7 @@ async def test_confirm_different_qty_after_first_confirm_returns_409(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_token: str,
+    cocinero_token: str,
     active_products: list[Product],
 ) -> None:
     """Confirming with a DIFFERENT qty after first confirm → 409."""
@@ -1125,10 +1125,10 @@ async def test_confirm_different_qty_after_first_confirm_returns_409(
     delivery = _make_delivery(db_session, owner_user.id, status="en_verificacion")
     item = _make_delivery_item(db_session, delivery, p1, owner_user.id, "10")
 
-    r1 = await _confirm_item(client, delivery.id, item.id, "8", operator_token)
+    r1 = await _confirm_item(client, delivery.id, item.id, "8", cocinero_token)
     assert r1.status_code == 200
 
-    r2 = await _confirm_item(client, delivery.id, item.id, "9", operator_token)
+    r2 = await _confirm_item(client, delivery.id, item.id, "9", cocinero_token)
     assert r2.status_code == 409
     assert "already confirmed" in r2.json()["detail"].lower()
 
@@ -1159,7 +1159,7 @@ async def test_confirm_item_not_in_delivery_returns_404(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_token: str,
+    cocinero_token: str,
     active_products: list[Product],
 ) -> None:
     """Confirming an item that does not belong to the delivery returns 404."""
@@ -1169,7 +1169,7 @@ async def test_confirm_item_not_in_delivery_returns_404(
     r = await client.post(
         f"/api/v1/deliveries/{delivery.id}/items/{uuid.uuid4()}/confirm",
         json={"received_qty": "5"},
-        headers={"Authorization": f"Bearer {operator_token}"},
+        headers={"Authorization": f"Bearer {cocinero_token}"},
     )
     assert r.status_code == 404
 
@@ -1184,8 +1184,8 @@ async def test_validate_all_confirmed_success(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_user,
-    operator_token: str,
+    cocinero_user,
+    cocinero_token: str,
     active_products: list[Product],
 ) -> None:
     """All items confirmed → validate transitions to validada with audit fields."""
@@ -1194,20 +1194,20 @@ async def test_validate_all_confirmed_success(
     _make_delivery_item(db_session, delivery, p1, owner_user.id, "10", received_qty="10")
     _make_delivery_item(db_session, delivery, p2, owner_user.id, "5", received_qty="4")
 
-    r = await _validate_delivery(client, delivery.id, operator_token)
+    r = await _validate_delivery(client, delivery.id, cocinero_token)
 
     assert r.status_code == 200
     data = r.json()
     assert data["status"] == "validada"
     assert data["validated_at"] is not None
-    assert data["validated_by"] == str(operator_user.id)
+    assert data["validated_by"] == str(cocinero_user.id)
 
     db_session.expire_all()
     fresh = db_session.get(Delivery, delivery.id)
     assert fresh.status == "validada"
-    assert fresh.validated_by == operator_user.id
+    assert fresh.validated_by == cocinero_user.id
     assert fresh.validated_at is not None
-    assert fresh.updated_by == operator_user.id
+    assert fresh.updated_by == cocinero_user.id
 
 
 @pytest.mark.asyncio
@@ -1215,7 +1215,7 @@ async def test_validate_with_pending_items_returns_400_with_list(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_token: str,
+    cocinero_token: str,
     active_products: list[Product],
 ) -> None:
     """If any item lacks received_qty, validate returns 400 with the pending IDs."""
@@ -1224,7 +1224,7 @@ async def test_validate_with_pending_items_returns_400_with_list(
     i1 = _make_delivery_item(db_session, delivery, p1, owner_user.id, "10", received_qty="10")
     i2 = _make_delivery_item(db_session, delivery, p2, owner_user.id, "5")  # not confirmed
 
-    r = await _validate_delivery(client, delivery.id, operator_token)
+    r = await _validate_delivery(client, delivery.id, cocinero_token)
 
     assert r.status_code == 400
     detail = r.json()["detail"]
@@ -1238,12 +1238,12 @@ async def test_validate_wrong_status_returns_409(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_token: str,
+    cocinero_token: str,
 ) -> None:
     """Validating a no_leida delivery returns 409."""
     delivery = _make_delivery(db_session, owner_user.id, status="no_leida")
 
-    r = await _validate_delivery(client, delivery.id, operator_token)
+    r = await _validate_delivery(client, delivery.id, cocinero_token)
     assert r.status_code == 409
 
 
@@ -1252,7 +1252,7 @@ async def test_concurrent_validate_second_returns_409(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_token: str,
+    cocinero_token: str,
     active_products: list[Product],
 ) -> None:
     """Two sequential validate calls: first succeeds, second returns 409.
@@ -1266,10 +1266,10 @@ async def test_concurrent_validate_second_returns_409(
     delivery = _make_delivery(db_session, owner_user.id, status="en_verificacion")
     _make_delivery_item(db_session, delivery, p1, owner_user.id, "5", received_qty="5")
 
-    r1 = await _validate_delivery(client, delivery.id, operator_token)
+    r1 = await _validate_delivery(client, delivery.id, cocinero_token)
     assert r1.status_code == 200
 
-    r2 = await _validate_delivery(client, delivery.id, operator_token)
+    r2 = await _validate_delivery(client, delivery.id, cocinero_token)
     assert r2.status_code == 409
     assert "already validated" in r2.json()["detail"].lower()
 
@@ -1333,8 +1333,8 @@ async def test_operator_corrects_same_day_creates_new_item_with_corrects_id(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_user,
-    operator_token: str,
+    cocinero_user,
+    cocinero_token: str,
     active_products: list[Product],
 ) -> None:
     """Same-day correction by operator: new row with corrects_id, original unchanged."""
@@ -1344,7 +1344,7 @@ async def test_operator_corrects_same_day_creates_new_item_with_corrects_id(
     r = await client.post(
         f"/api/v1/deliveries/{delivery.id}/items/{item.id}/correct",
         json={"received_qty": "7", "reason": "supplier short-shipped"},
-        headers={"Authorization": f"Bearer {operator_token}"},
+        headers={"Authorization": f"Bearer {cocinero_token}"},
     )
 
     assert r.status_code == 201
@@ -1368,7 +1368,7 @@ async def test_operator_correct_next_day_returns_403(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_token: str,
+    cocinero_token: str,
     active_products: list[Product],
 ) -> None:
     """Operator cannot correct an item when the delivery was validated on a previous day.
@@ -1386,7 +1386,7 @@ async def test_operator_correct_next_day_returns_403(
     r = await client.post(
         f"/api/v1/deliveries/{delivery.id}/items/{item.id}/correct",
         json={"received_qty": "5"},
-        headers={"Authorization": f"Bearer {operator_token}"},
+        headers={"Authorization": f"Bearer {cocinero_token}"},
     )
 
     assert r.status_code == 403
@@ -1779,8 +1779,8 @@ async def test_confirm_records_confirmed_by_and_confirmed_at(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_user,
-    operator_token: str,
+    cocinero_user,
+    cocinero_token: str,
     active_products: list[Product],
 ) -> None:
     """After confirm, delivery_item.confirmed_by == operator and confirmed_at is set."""
@@ -1789,12 +1789,12 @@ async def test_confirm_records_confirmed_by_and_confirmed_at(
     item = _make_delivery_item(db_session, delivery, p1, owner_user.id, "10")
 
     before = datetime.now(UTC)
-    r = await _confirm_item(client, delivery.id, item.id, "9", operator_token)
+    r = await _confirm_item(client, delivery.id, item.id, "9", cocinero_token)
     assert r.status_code == 200
 
     db_session.expire_all()
     fresh_item = db_session.get(DeliveryItem, item.id)
-    assert fresh_item.confirmed_by == operator_user.id
+    assert fresh_item.confirmed_by == cocinero_user.id
     assert fresh_item.confirmed_at is not None
     from datetime import timedelta as td
     assert fresh_item.confirmed_at >= before - td(seconds=5)
@@ -1805,8 +1805,8 @@ async def test_confirm_updates_delivery_updated_by(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_user,
-    operator_token: str,
+    cocinero_user,
+    cocinero_token: str,
     active_products: list[Product],
 ) -> None:
     """After confirm, delivery.updated_by == operator and updated_at is set."""
@@ -1814,12 +1814,12 @@ async def test_confirm_updates_delivery_updated_by(
     delivery = _make_delivery(db_session, owner_user.id, status="en_verificacion")
     item = _make_delivery_item(db_session, delivery, p1, owner_user.id, "10")
 
-    r = await _confirm_item(client, delivery.id, item.id, "10", operator_token)
+    r = await _confirm_item(client, delivery.id, item.id, "10", cocinero_token)
     assert r.status_code == 200
 
     db_session.expire_all()
     fresh = db_session.get(Delivery, delivery.id)
-    assert fresh.updated_by == operator_user.id
+    assert fresh.updated_by == cocinero_user.id
     assert fresh.updated_at is not None
 
 
@@ -1833,7 +1833,7 @@ async def test_confirm_concurrent_different_qty_returns_409_after_lock(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_token: str,
+    cocinero_token: str,
     active_products: list[Product],
 ) -> None:
     """Second confirm with different qty after first succeeds → 409.
@@ -1845,10 +1845,10 @@ async def test_confirm_concurrent_different_qty_returns_409_after_lock(
     delivery = _make_delivery(db_session, owner_user.id, status="en_verificacion")
     item = _make_delivery_item(db_session, delivery, p1, owner_user.id, "10")
 
-    r1 = await _confirm_item(client, delivery.id, item.id, "8", operator_token)
+    r1 = await _confirm_item(client, delivery.id, item.id, "8", cocinero_token)
     assert r1.status_code == 200
 
-    r2 = await _confirm_item(client, delivery.id, item.id, "9", operator_token)
+    r2 = await _confirm_item(client, delivery.id, item.id, "9", cocinero_token)
     assert r2.status_code == 409
     assert "already confirmed" in r2.json()["detail"].lower()
 
@@ -1890,9 +1890,9 @@ async def test_operator_correct_after_owner_correction_still_blocked_next_day(
     client: AsyncClient,
     db_session: Session,
     owner_user,
-    operator_user,
+    cocinero_user,
     owner_token: str,
-    operator_token: str,
+    cocinero_token: str,
     active_products: list[Product],
 ) -> None:
     """Owner corrects on day D+1; operator cannot then correct the new leaf on D+1.
@@ -1934,7 +1934,7 @@ async def test_operator_correct_after_owner_correction_still_blocked_next_day(
     r_op = await client.post(
         f"/api/v1/deliveries/{delivery.id}/items/{new_leaf_id}/correct",
         json={"received_qty": "6"},
-        headers={"Authorization": f"Bearer {operator_token}"},
+        headers={"Authorization": f"Bearer {cocinero_token}"},
     )
     assert r_op.status_code == 403
     assert "correction window closed" in r_op.json()["detail"].lower()
@@ -2011,3 +2011,59 @@ async def test_delivery_detail_exposes_reason_for_corrected_items(
     items = r_detail.json()["items"]
     assert len(items) == 1
     assert items[0]["reason"] == "weight check discrepancy"
+
+
+# ===========================================================================
+# Admin role — same correction window as cocinero (Backend #2 adversarial)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_admin_can_correct_item_same_day(
+    client: AsyncClient,
+    db_session: Session,
+    owner_user,
+    admin_user,
+    admin_token: str,
+    active_products: list[Product],
+) -> None:
+    """Admin can correct a delivery item within the same calendar day (same window as cocinero)."""
+    p1, *_ = active_products
+    delivery, item = _make_validated_delivery_with_item(db_session, owner_user.id, p1)
+
+    r = await client.post(
+        f"/api/v1/deliveries/{delivery.id}/items/{item.id}/correct",
+        json={"received_qty": "5", "reason": "weight discrepancy"},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    assert r.status_code == 201
+    data = r.json()
+    assert data["corrects_id"] == str(item.id)
+    assert data["received_qty"] == "5"
+
+
+@pytest.mark.asyncio
+async def test_admin_correct_next_day_returns_403(
+    client: AsyncClient,
+    db_session: Session,
+    owner_user,
+    admin_token: str,
+    active_products: list[Product],
+) -> None:
+    """Admin correction window closes after the calendar day — same behaviour as cocinero."""
+    p1, *_ = active_products
+    yesterday_utc = datetime.now(UTC) - timedelta(days=1)
+    delivery, item = _make_validated_delivery_with_item(
+        db_session, owner_user.id, p1,
+        validated_at=yesterday_utc,
+    )
+
+    r = await client.post(
+        f"/api/v1/deliveries/{delivery.id}/items/{item.id}/correct",
+        json={"received_qty": "5", "reason": "late catch"},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    assert r.status_code == 403
+    assert "window" in r.json()["detail"].lower()

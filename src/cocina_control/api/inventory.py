@@ -178,7 +178,7 @@ def _build_item_responses(
 
     viewer_role controls which schema is used:
     - "owner": InventoryItemResponseOwner  (includes corrects_id + reason)
-    - "operator" or any other role: InventoryItemResponseOperator  (excludes
+    - "cocinero" or any other role: InventoryItemResponseOperator  (excludes
       both fields to prevent the operator from reconstructing correction chains
       and inferring previous values — requerimientos.md §1)
 
@@ -250,7 +250,7 @@ def _count_to_response(
     viewer_role is forwarded to _build_item_responses to select the correct
     response schema:
     - "owner": full fields including corrects_id + reason
-    - "operator": stripped view without corrects_id or reason
+    - "cocinero": stripped view without corrects_id or reason
     """
     all_item_responses = _build_item_responses(session, count.id, viewer_role)
 
@@ -351,7 +351,7 @@ def get_count(
     """
     count = _get_count_or_404(session, count_id)
 
-    if current_user.role == "operator":
+    if current_user.role in ("cocinero", "admin"):
         if count.started_by != current_user.id or count.status != "in_progress":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -376,7 +376,7 @@ def add_item(
     count_id: uuid.UUID,
     body: InventoryItemCreate,
     session: Session = Depends(get_session),
-    current_user: User = Depends(require_role("operator")),
+    current_user: User = Depends(require_role("cocinero")),
 ) -> InventoryItemResponseOperator:
     """Record the counted quantity for a product within a count session.
 
@@ -510,7 +510,7 @@ def correct_item(
     # Enforce ownership and time-window for operators.
     # Ownership is checked BEFORE the time window so that an operator cannot
     # probe whether another operator's session exists by testing the time window.
-    if current_user.role == "operator":
+    if current_user.role in ("cocinero", "admin"):
         if count.started_by != current_user.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -631,7 +631,7 @@ def complete_count(
     count = _get_count_for_update_or_404(session, count_id)
 
     # Ownership check for operator: cannot complete another operator's session.
-    if current_user.role == "operator" and count.started_by != current_user.id:
+    if current_user.role in ("cocinero", "admin") and count.started_by != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Forbidden",

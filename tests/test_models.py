@@ -41,7 +41,7 @@ def _make_user(name: str = "Test User", email: str | None = None) -> dict:
         "name": name,
         "email": email or f"{uuid.uuid4().hex[:8]}@test.com",
         "password_hash": "hashed",
-        "role": "operator",
+        "role": "cocinero",
         "created_at": datetime.now(UTC),
     }
 
