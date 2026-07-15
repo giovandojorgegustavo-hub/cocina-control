@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 import uuid
+from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 
 import jwt
@@ -559,3 +560,47 @@ def test_require_any_role_rejects_empty_args() -> None:
 
     with pytest.raises(ValueError, match="at least one role"):
         require_any_role()
+
+
+# ---------------------------------------------------------------------------
+# Test: global exception handler (SEG-ALTO H-1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_global_exception_handler_returns_500_without_traceback(
+    db_session: Session,
+) -> None:
+    """Unhandled exceptions must return 500 with a generic body — no traceback, no message leak.
+
+    The /_test/raise-exception endpoint raises RuntimeError intentionally.
+    The global handler in main.py must catch it, log it server-side, and
+    return {"detail": "Internal server error"} with no stack trace in the body.
+
+    We create a dedicated client with raise_server_exceptions=False so that
+    the ASGITransport does NOT re-raise the server-side exception into the
+    test process — we want to observe the actual HTTP response the handler
+    produces, not catch the raw exception.
+    """
+    from cocina_control.db import get_session
+    from cocina_control.main import app
+
+    def _override() -> Generator[Session, None, None]:
+        yield db_session
+
+    app.dependency_overrides[get_session] = _override
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://test",
+        ) as ac:
+            resp = await ac.get("/api/v1/_test/raise-exception")
+    finally:
+        app.dependency_overrides.pop(get_session, None)
+
+    assert resp.status_code == 500
+    body = resp.json()
+    assert body == {"detail": "Internal server error"}
+    # Paranoid checks: the specific error message and exception type must NOT leak.
+    assert "test-only" not in resp.text
+    assert "RuntimeError" not in resp.text

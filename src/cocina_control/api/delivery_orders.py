@@ -45,7 +45,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from cocina_control.api.deps import get_current_user, require_role
+from cocina_control.api.deps import get_current_user, require_any_role, require_role
 from cocina_control.config import get_settings
 from cocina_control.db import get_session
 from cocina_control.models.delivery_order import DeliveryOrder, DeliveryOrderItem
@@ -196,11 +196,11 @@ def _handle_integrity_error(exc: IntegrityError, constraint_fragment: str) -> No
     "",
     response_model=DeliveryOrderCreatedResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Create a pending order (operator only)",
+    summary="Create a pending order (cocinero or admin)",
 )
 def create_order(
     session: Session = Depends(get_session),
-    current_user: User = Depends(require_role("cocinero")),
+    current_user: User = Depends(require_any_role("cocinero", "admin")),
 ) -> DeliveryOrderCreatedResponse:
     """Operator creates an empty order in 'pending' status.
 
@@ -231,13 +231,13 @@ def create_order(
     "/{order_id}/photo",
     response_model=DeliveryOrderPhotoResponse,
     status_code=status.HTTP_200_OK,
-    summary="Upload photo for an order (operator only)",
+    summary="Upload photo for an order (cocinero or admin)",
 )
 async def upload_photo(
     order_id: uuid.UUID,
     file: UploadFile,
     session: Session = Depends(get_session),
-    current_user: User = Depends(require_role("cocinero")),
+    current_user: User = Depends(require_any_role("cocinero", "admin")),
 ) -> DeliveryOrderPhotoResponse:
     """Upload a JPEG or PNG photo for a pending order.
 
@@ -420,13 +420,13 @@ def list_orders(
 @router.post(
     "/{order_id}/complete",
     response_model=DeliveryOrderDetailResponse,
-    summary="Complete an order with product items (operator only)",
+    summary="Complete an order with product items (cocinero or admin)",
 )
 def complete_order(
     order_id: uuid.UUID,
     body: DeliveryOrderComplete,
     session: Session = Depends(get_session),
-    current_user: User = Depends(require_role("cocinero")),
+    current_user: User = Depends(require_any_role("cocinero", "admin")),
 ) -> DeliveryOrderDetailResponse:
     """Mark a pending order as completed and record product items.
 

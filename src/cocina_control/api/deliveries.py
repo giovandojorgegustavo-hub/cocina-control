@@ -60,7 +60,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from cocina_control.api.deps import get_current_user, require_role
+from cocina_control.api.deps import get_current_user, require_any_role, require_role
 from cocina_control.db import get_session
 from cocina_control.models.delivery import Delivery, DeliveryItem
 from cocina_control.models.product import Product
@@ -481,12 +481,12 @@ def update_delivery(
 @router.post(
     "/{delivery_id}/open",
     response_model=DeliveryDetailResponse,
-    summary="Open delivery for verification (operator only)",
+    summary="Open delivery for verification (cocinero or admin)",
 )
 def open_delivery(
     delivery_id: uuid.UUID,
     session: Session = Depends(get_session),
-    current_user: User = Depends(require_role("cocinero")),
+    current_user: User = Depends(require_any_role("cocinero", "admin")),
 ) -> DeliveryDetailResponse:
     """Transition a delivery from no_leida → en_verificacion.
 
@@ -530,14 +530,14 @@ def open_delivery(
 @router.post(
     "/{delivery_id}/items/{item_id}/confirm",
     response_model=DeliveryItemResponse,
-    summary="Confirm item quantity received (operator only)",
+    summary="Confirm item quantity received (cocinero or admin)",
 )
 def confirm_item(
     delivery_id: uuid.UUID,
     item_id: uuid.UUID,
     body: DeliveryItemConfirm,
     session: Session = Depends(get_session),
-    current_user: User = Depends(require_role("cocinero")),
+    current_user: User = Depends(require_any_role("cocinero", "admin")),
 ) -> DeliveryItemResponse:
     """Set received_qty on a leaf item while the delivery is en_verificacion.
 
@@ -637,12 +637,12 @@ def confirm_item(
 @router.post(
     "/{delivery_id}/validate",
     response_model=DeliveryDetailResponse,
-    summary="Validate delivery (operator only, all items must be confirmed)",
+    summary="Validate delivery (cocinero or admin, all items must be confirmed)",
 )
 def validate_delivery(
     delivery_id: uuid.UUID,
     session: Session = Depends(get_session),
-    current_user: User = Depends(require_role("cocinero")),
+    current_user: User = Depends(require_any_role("cocinero", "admin")),
 ) -> DeliveryDetailResponse:
     """Finalise a delivery, transitioning it from en_verificacion → validada.
 
