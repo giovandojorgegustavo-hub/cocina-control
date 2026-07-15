@@ -190,7 +190,7 @@ Vista completa: lo que se pidió, cada partida que llegó (con quién y cuándo 
 - El saldo pendiente por producto: cantidad pedida menos la suma de todas las partidas recibidas para ese producto.
 - "✓" en la columna "Saldo" indica que ese producto está completo.
 - "← " en la columna "Saldo" indica que todavía falta.
-- Si hay ediciones sobre una línea (cantidad esperada y/o costo), se muestra "ver historial de la orden" al lado de esa línea (ver Pantalla 6).
+- Si la orden tiene ediciones (cantidad esperada y/o costo de alguna línea), se muestra "ver historial de la orden", que abre el historial de la **orden completa** (ver Pantalla 6). La edición en sí es por línea: cada línea permite abrir el modal "editar compra".
 - Los totales en soles aparecen porque es vista del dueño.
 - El botón "reabrir" solo es visible si la orden está en estado **cerrada**. Si está abierta o recibida parcial, no aparece.
 - El botón "anular orden" siempre visible mientras la orden no esté ya anulada.
@@ -294,9 +294,11 @@ Al confirmar en cualquier caso:
 
 ---
 
-## Pantalla 6 — Historial de la orden (ediciones de una línea)
+## Pantalla 6 — Historial de la orden
 
-Accesible desde el detalle de la orden (Pantalla 3), al tocar "ver historial de la orden" junto a una línea. Muestra las **ediciones de la compra** sobre esa línea: cantidad esperada y costo unitario, no solo costo.
+Accesible desde el detalle de la orden (Pantalla 3), al tocar "ver historial de la orden". Muestra las **ediciones de la compra** de la orden completa: cantidad esperada y costo unitario, no solo costo.
+
+**Regla: se edita por línea, se audita por orden.** El modal de edición opera sobre UNA línea (un producto); este historial muestra TODAS las ediciones de TODAS las líneas de la orden, mezcladas y ordenadas por fecha descendente, con columna Producto para distinguirlas.
 
 **Este historial es DE LA ORDEN** — el lado "entrada de plata": qué se pidió y a qué precio, con sus ediciones append-only. No es un historial del producto (los movimientos del producto — partidas, pedidos, conteos — viven en la trazabilidad del tablero).
 
@@ -304,21 +306,26 @@ Pueden editar la compra el **dueño y el admin** (revisión de roles del 13 jul 
 
 ```
 +------------------------------------------------------------------------------+
-|  <  HISTORIAL DE LA ORDEN — POLLO  (Orden Carniceria Lopez)                  |
+|  <  HISTORIAL DE LA ORDEN — Carniceria Lopez                                 |
 +------------------------------------------------------------------------------+
 |                                                                              |
 |  +------------------------------------------------------------------------+  |
-|  | Fecha          Cant. esperada  Costo unit.  Registró     Nota          |  |
-|  |----------------|---------------|------------|-------------|-------------|  |
-|  | 12 jul · 10:15    110 kg        S/. 7,50    Juan Dueño   edita compra  |  |
-|  | 10 jul · 16:30    100 kg        S/. 7,00    Juan Dueño   [original]    |  |
+|  | Fecha          Producto  Cant. esp.  Costo unit.  Registró    Nota    |  |
+|  |----------------|---------|-----------|------------|------------|--------|  |
+|  | 12 jul · 10:15  POLLO      110 kg     S/. 7,50    Juan Dueño  edita   |  |
+|  |                                                                compra  |  |
+|  | 10 jul · 16:30  CERDO       20 kg     S/. 9,50    Juan Dueño  [orig.] |  |
+|  | 10 jul · 16:30  POLLO      100 kg     S/. 7,00    Juan Dueño  [orig.] |  |
 |  +------------------------------------------------------------------------+  |
 |                                                                              |
-|  Vigente: 110 kg esperados · S/. 7,50 / kg                                   |
+|  Vigente: POLLO 110 kg @ S/. 7,50 · CERDO 20 kg @ S/. 9,50                   |
 |                                                                              |
 |  [ + editar compra ]                                                         |
 +------------------------------------------------------------------------------+
 ```
+
+- Cada fila es un registro append-only de una línea: el original ([registro original]) o una edición que apunta al anterior de la misma línea.
+- **"+ editar compra"** abre el modal para la línea que el dueño elija. También se llega directo desde la línea en el detalle de la orden (Pantalla 3).
 
 Al tocar "editar compra":
 
