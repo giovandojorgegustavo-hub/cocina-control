@@ -2,7 +2,9 @@
 
 ## Objetivo del flujo
 
-Que el dueño pre-cargue una compra (proveedor, productos, cantidades y costos) antes de que el proveedor llegue. La orden queda abierta; cuando llegan las partidas, el operario las verifica usando el flujo de entrada (ver `registro-entrada.md`). El dueño puede seguir el estado de sus órdenes, ver lo que efectivamente llegó, reabrir una cerrada si hace falta, anular con motivo, y corregir un costo sin sobrescribir el original.
+Que el dueño pre-cargue una compra (proveedor, productos, cantidades y costos) antes de que el proveedor llegue. La orden queda abierta; cuando llegan las partidas, el operario las verifica usando el flujo de entrada (ver `registro-entrada.md`). El dueño puede seguir el estado de sus órdenes, ver lo que efectivamente llegó, reabrir una cerrada si hace falta, anular con motivo, y **editar la compra** (cantidad esperada y/o costo unitario de una línea) sin sobrescribir el registro original.
+
+> **Revisión 13 jul 2026 — "no es corregir un costo, es editar la compra".** El flujo que antes se llamaba "corregir costo" se reencuadra: lo que el dueño edita es la **línea de la orden** — la cantidad esperada, el costo unitario, o ambos. Cada edición es un registro nuevo append-only que apunta al anterior (el modelo de backend ya soporta ambas cadenas). Ver Pantalla 6.
 
 ## Usuario
 
@@ -188,7 +190,7 @@ Vista completa: lo que se pidió, cada partida que llegó (con quién y cuándo 
 - El saldo pendiente por producto: cantidad pedida menos la suma de todas las partidas recibidas para ese producto.
 - "✓" en la columna "Saldo" indica que ese producto está completo.
 - "← " en la columna "Saldo" indica que todavía falta.
-- Si hay correcciones de costo, se muestra "ver historial de costo" al lado del costo unitario de ese ítem (ver Pantalla 6).
+- Si hay ediciones sobre una línea (cantidad esperada y/o costo), se muestra "ver historial de la orden" al lado de esa línea (ver Pantalla 6).
 - Los totales en soles aparecen porque es vista del dueño.
 - El botón "reabrir" solo es visible si la orden está en estado **cerrada**. Si está abierta o recibida parcial, no aparece.
 - El botón "anular orden" siempre visible mientras la orden no esté ya anulada.
@@ -227,7 +229,7 @@ Al confirmar:
 - En el detalle de la orden, aparece una línea en el historial: "Reabierta el 14 jul 2026 — 11:05 (Juan Dueño) — Motivo: El proveedor mandó 10 kg más de pollo el 14 jul".
 - El operario la vuelve a ver en su bandeja como abierta, con el saldo pendiente calculado a partir de todo lo ya recibido.
 
-> PREGUNTA A BACKEND: ¿la reapertura recalcula automáticamente el saldo pendiente a partir de las partidas ya registradas, o el dueño tiene que ajustar las cantidades esperadas? Asumo: el saldo se recalcula sobre lo mismo que se pidió originalmente. Si el dueño quiere pedir más cantidad del producto, necesita editar la orden — ¿es posible en v0.3? Marcar como pendiente si no está resuelto.
+> PREGUNTA A BACKEND: ¿la reapertura recalcula automáticamente el saldo pendiente a partir de las partidas ya registradas? Asumo: sí — el saldo se recalcula contra la cantidad esperada **vigente** de cada línea. Si el dueño quiere pedir más cantidad de un producto, edita la compra (Pantalla 6): la cantidad esperada vigente sube y el saldo pendiente se recalcula solo.
 
 ---
 
@@ -292,40 +294,49 @@ Al confirmar en cualquier caso:
 
 ---
 
-## Pantalla 6 — Historial de costo de un ítem
+## Pantalla 6 — Historial de la orden (ediciones de una línea)
 
-Accesible desde el detalle de la orden (Pantalla 3), al tocar "ver historial de costo" junto al costo unitario de un producto.
+Accesible desde el detalle de la orden (Pantalla 3), al tocar "ver historial de la orden" junto a una línea. Muestra las **ediciones de la compra** sobre esa línea: cantidad esperada y costo unitario, no solo costo.
+
+**Este historial es DE LA ORDEN** — el lado "entrada de plata": qué se pidió y a qué precio, con sus ediciones append-only. No es un historial del producto (los movimientos del producto — partidas, pedidos, conteos — viven en la trazabilidad del tablero).
+
+Pueden editar la compra el **dueño y el admin** (revisión de roles del 13 jul 2026); el cocinero no accede a esta pantalla.
 
 ```
 +------------------------------------------------------------------------------+
-|  <  HISTORIAL DE COSTO — POLLO  (Orden Carniceria Lopez)                     |
+|  <  HISTORIAL DE LA ORDEN — POLLO  (Orden Carniceria Lopez)                  |
 +------------------------------------------------------------------------------+
 |                                                                              |
 |  +------------------------------------------------------------------------+  |
-|  | Fecha          Costo unit.   Registró          Nota                   |  |
-|  |----------------|-------------|-----------------|------------------------|  |
-|  | 12 jul · 10:15  S/. 7,50    Juan Dueño        corrige registro anterior|  |
-|  | 10 jul · 16:30  S/. 7,00    Juan Dueño        [registro original]      |  |
+|  | Fecha          Cant. esperada  Costo unit.  Registró     Nota          |  |
+|  |----------------|---------------|------------|-------------|-------------|  |
+|  | 12 jul · 10:15    110 kg        S/. 7,50    Juan Dueño   edita compra  |  |
+|  | 10 jul · 16:30    100 kg        S/. 7,00    Juan Dueño   [original]    |  |
 |  +------------------------------------------------------------------------+  |
 |                                                                              |
-|  Costo vigente: S/. 7,50 / kg                                                |
+|  Vigente: 110 kg esperados · S/. 7,50 / kg                                   |
 |                                                                              |
-|  [ + corregir costo ]                                                        |
+|  [ + editar compra ]                                                         |
 +------------------------------------------------------------------------------+
 ```
 
-Al tocar "corregir costo":
+Al tocar "editar compra":
 
 ```
 +------------------------------------------------------------------------------+
 |                                                                              |
 |  +------------------------------------------+                               |
-|  |  CORREGIR COSTO — POLLO                  |                               |
-|  |  Costo actual: S/. 7,00 / kg             |                               |
+|  |  EDITAR COMPRA — POLLO                   |                               |
+|  |  Vigente: 100 kg · S/. 7,00 / kg         |                               |
 |  |                                          |                               |
-|  |  Nuevo costo unitario                    |                               |
+|  |  Cantidad esperada                       |                               |
 |  |  +-------------------------------+       |                               |
-|  |  |  S/.  [ 7,50 ]               |       |                               |
+|  |  |  [ 100 ]  kg                  |       |                               |
+|  |  +-------------------------------+       |                               |
+|  |                                          |                               |
+|  |  Costo unitario                          |                               |
+|  |  +-------------------------------+       |                               |
+|  |  |  S/.  [ 7,00 ]                |       |                               |
 |  |  +-------------------------------+       |                               |
 |  |                                          |                               |
 |  |  Motivo (opcional)                       |                               |
@@ -334,22 +345,28 @@ Al tocar "corregir costo":
 |  |  |  ajustado                     |       |                               |
 |  |  +-------------------------------+       |                               |
 |  |                                          |                               |
-|  |  [ cancelar ]    [ guardar corrección ]  |                               |
+|  |  [ cancelar ]      [ guardar edición ]   |                               |
 |  +------------------------------------------+                               |
 |                                                                              |
 +------------------------------------------------------------------------------+
 ```
 
+- Los dos campos vienen **precargados con los valores vigentes**. El dueño cambia uno, el otro, o ambos.
+- Guardar sin cambiar nada no crea registro (el botón queda deshabilitado si ambos valores son iguales a los vigentes).
+
 Al guardar:
 
-- Se crea un **registro nuevo de costo** con puntero al original (append-only). El original nunca se toca.
-- El costo vigente del ítem pasa a ser el nuevo valor.
-- El historial muestra ambos registros, ordenados más reciente primero.
-- El tablero del dueño y los cálculos de PMP usan el costo vigente al momento de cada cálculo.
+- Se crea un **registro nuevo de edición** que apunta al registro anterior (append-only). El original nunca se toca. El modelo de backend ya soporta ambas cadenas: cantidad esperada y costo.
+- Los valores vigentes de la línea pasan a ser los nuevos.
+- El saldo pendiente de la línea se recalcula contra la cantidad esperada vigente.
+- El historial muestra todos los registros, ordenados más reciente primero.
+- El tablero del dueño y la valuación FIFO usan el costo vigente de la línea para las partidas de esta orden.
 
-> PREGUNTA A BACKEND: ¿la corrección de costo afecta retroactivamente el promedio ponderado de lotes ya calculados, o solo los cálculos futuros? Asumo: solo hacia adelante — los PMP ya calculados no se recalculan. Confirmar con backend antes de implementar.
+> **Nota — esto NO reemplaza la corrección de cantidades RECIBIDAS.** Editar la compra toca lo que se **pidió** (cantidad esperada) y a qué **precio**. Lo que efectivamente **llegó** lo registra el operario al verificar cada partida — flujo de v0.2, sin cambios (ver `registro-entrada.md`). Compra y entrada siguen siendo hechos distintos con registros distintos.
 
-> PREGUNTA A BACKEND: ¿hay un límite de correcciones de costo por ítem? Asumo: no hay límite. Cada corrección es un registro más en el historial.
+> PREGUNTA A BACKEND: ¿la edición del costo afecta retroactivamente la valuación FIFO de agotamientos ya minados? Asumo: la valuación es minería posterior recomputable desde los eventos; el costo vigente de la línea rige para las partidas de esta orden. Confirmar si los cálculos ya publicados de períodos anteriores se recomputan o se corrigen hacia adelante.
+
+> PREGUNTA A BACKEND: ¿hay un límite de ediciones por línea? Asumo: no hay límite. Cada edición es un registro más en el historial.
 
 ---
 
@@ -397,8 +414,9 @@ Banner naranja arriba, no bloquea la lectura de las órdenes ya cargadas. Si el 
 
 ## Correcciones en este flujo
 
-- **Datos de la orden (antes de que llegue la primera partida):** ¿puede el dueño editar la orden? Ver pregunta a backend sobre edición de entregas anunciadas en `registro-entrada.md`. Aplica lo mismo acá: editable mientras no haya partidas registradas; congelada a partir de la primera partida.
-- **Costo unitario:** siempre corregible con registro nuevo (ver Pantalla 6). No hay ventana de tiempo — el dueño puede corregir en cualquier momento.
+- **Estructura de la orden (proveedor, alta/baja de líneas):** editable mientras no haya partidas registradas; congelada a partir de la primera partida. Ver pregunta a backend sobre edición de entregas anunciadas en `registro-entrada.md`.
+- **Cantidad esperada y costo unitario de una línea:** siempre editables con registro nuevo — "editar compra", ver Pantalla 6. No hay ventana de tiempo — dueño y admin pueden editar en cualquier momento, incluso con partidas recibidas.
+- **Cantidades recibidas:** NO se corrigen acá — la corrección de una partida es el flujo del operario de v0.2 (`registro-entrada.md`).
 - **Anulación:** no es reversible excepto por reapertura explícita. Pero al ser todo append-only, el registro de anulación siempre está. Un order anulada NO se puede reabrir — crear una nueva orden si hace falta.
 
 > PREGUNTA A BACKEND: ¿una orden anulada puede reabrirse o solo crear una nueva? Decisión de diseño asumida: no se reabre — se crea una nueva. Confirmar con el dueño.
@@ -410,10 +428,10 @@ Banner naranja arriba, no bloquea la lectura de las órdenes ya cargadas. Si el 
 - Costos unitarios por producto.
 - Total de la orden, total recibido, saldo pendiente en soles.
 - Quién registró cada partida y cuándo.
-- Historial de correcciones de costo, con registros anteriores visibles.
+- Historial de ediciones de la orden (cantidad esperada y costo), con registros anteriores visibles.
 
 ## Qué NO se muestra en este flujo
 
-- Promedio ponderado por ítem (eso es cálculo del tablero, no de la orden individual).
+- Valuación FIFO ni remanentes por partida (eso es cálculo del tablero — ver "Partidas por producto" en `tablero-dueno.md`).
 - Stock actual del producto al momento de crear la orden (no es análisis del dueño en este contexto).
 - Datos de pedidos o inventarios asociados (ese cruce es el tablero, no la orden).
