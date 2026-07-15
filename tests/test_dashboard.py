@@ -6,7 +6,7 @@ Covers all 3 endpoints:
   GET /api/v1/dashboard/export
 
 Fixtures inherited from conftest.py:
-  owner_user, operator_user, owner_token, operator_token,
+  owner_user, cocinero_user, owner_token, cocinero_token,
   client, db_session.
 """
 
@@ -312,7 +312,7 @@ async def test_summary_no_prior_count_shows_consumption_unavailable(
     db_session: Session,
     owner_token: str,
     owner_user,
-    operator_user,
+    cocinero_user,
 ):
     """A product with no prior count returns consumption_available=False."""
     _make_product(db_session, owner_user.id, "HARINA")
@@ -337,7 +337,7 @@ async def test_summary_consumption_formula_correct(
     db_session: Session,
     owner_token: str,
     owner_user,
-    operator_user,
+    cocinero_user,
 ):
     """Verify consumption = stock_inicio + entries - stock_actual.
 
@@ -347,7 +347,7 @@ async def test_summary_consumption_formula_correct(
       stock_actual = 25 (count in range)
       consumption  = 20 + 8 - 25 = 3
     """
-    palta, _ = seed_scenario(db_session, owner_user.id, operator_user.id)
+    palta, _ = seed_scenario(db_session, owner_user.id, cocinero_user.id)
 
     # Range: today only (seed_scenario puts in-range events in the last 30 minutes).
     today = _local_today()
@@ -372,7 +372,7 @@ async def test_summary_alert_on_negative_consumption(
     db_session: Session,
     owner_token: str,
     owner_user,
-    operator_user,
+    cocinero_user,
 ):
     """consumption < 0 triggers alert.
 
@@ -381,22 +381,22 @@ async def test_summary_alert_on_negative_consumption(
     palta = _make_product(db_session, owner_user.id, "PALTA")
 
     ten_days_ago = datetime.now(UTC) - timedelta(days=10)
-    prior_count = _make_count(db_session, operator_user.id, completed_at=ten_days_ago)
+    prior_count = _make_count(db_session, cocinero_user.id, completed_at=ten_days_ago)
     prior_count.started_at = ten_days_ago
     prior_count.created_at = ten_days_ago
     db_session.flush()
     _make_count_item(
-        db_session, prior_count.id, palta.id, operator_user.id, "5", created_at=ten_days_ago
+        db_session, prior_count.id, palta.id, cocinero_user.id, "5", created_at=ten_days_ago
     )
 
     # Count in range: today, 30 minutes ago.
     in_range_ts = _local_midday_today_utc()
-    count_in_range = _make_count(db_session, operator_user.id, completed_at=in_range_ts)
+    count_in_range = _make_count(db_session, cocinero_user.id, completed_at=in_range_ts)
     count_in_range.started_at = in_range_ts
     count_in_range.created_at = in_range_ts
     db_session.flush()
     _make_count_item(
-        db_session, count_in_range.id, palta.id, operator_user.id, "10", created_at=in_range_ts
+        db_session, count_in_range.id, palta.id, cocinero_user.id, "10", created_at=in_range_ts
     )
 
     today = _local_today()
@@ -420,7 +420,7 @@ async def test_summary_low_stock_list_filters_by_threshold(
     db_session: Session,
     owner_token: str,
     owner_user,
-    operator_user,
+    cocinero_user,
 ):
     """Product without threshold never appears in low_stock; with threshold and
     stock below threshold it does appear."""
@@ -431,12 +431,12 @@ async def test_summary_low_stock_list_filters_by_threshold(
 
     # Completed count with stock_now=3 for PALTA and 1 for POLLO.
     now = datetime.now(UTC)
-    count = _make_count(db_session, operator_user.id, completed_at=now)
+    count = _make_count(db_session, cocinero_user.id, completed_at=now)
     count.started_at = now
     count.created_at = now
     db_session.flush()
-    _make_count_item(db_session, count.id, palta.id, operator_user.id, "3", created_at=now)
-    _make_count_item(db_session, count.id, pollo.id, operator_user.id, "1", created_at=now)
+    _make_count_item(db_session, count.id, palta.id, cocinero_user.id, "3", created_at=now)
+    _make_count_item(db_session, count.id, pollo.id, cocinero_user.id, "1", created_at=now)
 
     today = _local_today()
     resp = await client.get(
@@ -459,19 +459,19 @@ async def test_summary_orders_summary_counts_photo_only(
     db_session: Session,
     owner_token: str,
     owner_user,
-    operator_user,
+    cocinero_user,
 ):
     """orders_summary splits completed vs photo-only (pending)."""
     now = datetime.now(UTC)
 
     # 2 completed orders.
     for _ in range(2):
-        o = _make_delivery_order(db_session, operator_user.id, status="completed", completed_at=now)
+        o = _make_delivery_order(db_session, cocinero_user.id, status="completed", completed_at=now)
         o.created_at = now
         db_session.flush()
 
     # 1 photo-only (pending).
-    pending = _make_delivery_order(db_session, operator_user.id, status="pending")
+    pending = _make_delivery_order(db_session, cocinero_user.id, status="pending")
     pending.created_at = now
     db_session.flush()
 
@@ -489,12 +489,12 @@ async def test_summary_orders_summary_counts_photo_only(
 @pytest.mark.asyncio
 async def test_summary_operator_returns_403(
     client: AsyncClient,
-    operator_token: str,
+    cocinero_token: str,
 ):
     today = _local_today()
     resp = await client.get(
         f"{_BASE}/summary?from={today}&to={today}",
-        headers=_auth(operator_token),
+        headers=_auth(cocinero_token),
     )
     assert resp.status_code == 403
 
@@ -512,28 +512,28 @@ async def test_summary_only_considers_validated_deliveries(
     db_session: Session,
     owner_token: str,
     owner_user,
-    operator_user,
+    cocinero_user,
 ):
     """A delivery in status pending or en_verificacion must NOT count as entries."""
     palta = _make_product(db_session, owner_user.id, "PALTA")
 
     ten_days_ago = datetime.now(UTC) - timedelta(days=10)
-    prior_count = _make_count(db_session, operator_user.id, completed_at=ten_days_ago)
+    prior_count = _make_count(db_session, cocinero_user.id, completed_at=ten_days_ago)
     prior_count.started_at = ten_days_ago
     prior_count.created_at = ten_days_ago
     db_session.flush()
     _make_count_item(
-        db_session, prior_count.id, palta.id, operator_user.id, "10", created_at=ten_days_ago
+        db_session, prior_count.id, palta.id, cocinero_user.id, "10", created_at=ten_days_ago
     )
 
     # Count in range = 10 (same as inicio, no change if no entries counted).
     in_range_ts = _local_midday_today_utc()
-    count_in_range = _make_count(db_session, operator_user.id, completed_at=in_range_ts)
+    count_in_range = _make_count(db_session, cocinero_user.id, completed_at=in_range_ts)
     count_in_range.started_at = in_range_ts
     count_in_range.created_at = in_range_ts
     db_session.flush()
     _make_count_item(
-        db_session, count_in_range.id, palta.id, operator_user.id, "10", created_at=in_range_ts
+        db_session, count_in_range.id, palta.id, cocinero_user.id, "10", created_at=in_range_ts
     )
 
     # Pending delivery (should NOT count as entries).
@@ -567,27 +567,27 @@ async def test_summary_only_considers_completed_orders(
     db_session: Session,
     owner_token: str,
     owner_user,
-    operator_user,
+    cocinero_user,
 ):
     """Pending orders must NOT affect stock_now or consumption."""
     palta = _make_product(db_session, owner_user.id, "PALTA")
 
     # Completed count gives stock baseline = 20.
     now = datetime.now(UTC)
-    count = _make_count(db_session, operator_user.id, completed_at=now - timedelta(hours=2))
+    count = _make_count(db_session, cocinero_user.id, completed_at=now - timedelta(hours=2))
     count.started_at = now - timedelta(hours=2)
     count.created_at = now - timedelta(hours=2)
     db_session.flush()
     _make_count_item(
-        db_session, count.id, palta.id, operator_user.id, "20",
+        db_session, count.id, palta.id, cocinero_user.id, "20",
         created_at=now - timedelta(hours=2),
     )
 
     # Pending order (photo-only) should NOT deduct from stock.
-    pending_order = _make_delivery_order(db_session, operator_user.id, status="pending")
+    pending_order = _make_delivery_order(db_session, cocinero_user.id, status="pending")
     pending_order.created_at = now
     db_session.flush()
-    _make_delivery_order_item(db_session, pending_order.id, palta.id, operator_user.id, "5")
+    _make_delivery_order_item(db_session, pending_order.id, palta.id, cocinero_user.id, "5")
 
     today = _local_today()
     resp = await client.get(
@@ -608,19 +608,19 @@ async def test_summary_uses_leaf_items(
     db_session: Session,
     owner_token: str,
     owner_user,
-    operator_user,
+    cocinero_user,
 ):
     """A corrected delivery item must not double-count: only the leaf counts."""
     palta = _make_product(db_session, owner_user.id, "PALTA")
 
     # Count before range.
     ten_days_ago = datetime.now(UTC) - timedelta(days=10)
-    prior_count = _make_count(db_session, operator_user.id, completed_at=ten_days_ago)
+    prior_count = _make_count(db_session, cocinero_user.id, completed_at=ten_days_ago)
     prior_count.started_at = ten_days_ago
     prior_count.created_at = ten_days_ago
     db_session.flush()
     _make_count_item(
-        db_session, prior_count.id, palta.id, operator_user.id, "10", created_at=ten_days_ago
+        db_session, prior_count.id, palta.id, cocinero_user.id, "10", created_at=ten_days_ago
     )
 
     # Validated delivery today (in range) with a correction.
@@ -639,12 +639,12 @@ async def test_summary_uses_leaf_items(
     )
 
     # Count in range (today).
-    count_in_range = _make_count(db_session, operator_user.id, completed_at=in_range_ts)
+    count_in_range = _make_count(db_session, cocinero_user.id, completed_at=in_range_ts)
     count_in_range.started_at = in_range_ts
     count_in_range.created_at = in_range_ts
     db_session.flush()
     _make_count_item(
-        db_session, count_in_range.id, palta.id, operator_user.id, "18", created_at=in_range_ts
+        db_session, count_in_range.id, palta.id, cocinero_user.id, "18", created_at=in_range_ts
     )
 
     today = _local_today()
@@ -673,7 +673,7 @@ async def test_traceability_returns_all_events_for_product(
     db_session: Session,
     owner_token: str,
     owner_user,
-    operator_user,
+    cocinero_user,
 ):
     """Traceability returns delivery_item, delivery_order_item, and count_item events."""
     palta = _make_product(db_session, owner_user.id, "PALTA")
@@ -685,23 +685,23 @@ async def test_traceability_returns_all_events_for_product(
     delivery.created_at = now
     db_session.flush()
     d_item = _make_delivery_item(
-        db_session, delivery.id, palta.id, operator_user.id, "10", "10", created_at=now
+        db_session, delivery.id, palta.id, cocinero_user.id, "10", "10", created_at=now
     )
 
     # Completed order.
-    order = _make_delivery_order(db_session, operator_user.id, status="completed", completed_at=now)
+    order = _make_delivery_order(db_session, cocinero_user.id, status="completed", completed_at=now)
     order.created_at = now
     db_session.flush()
     o_item = _make_delivery_order_item(
-        db_session, order.id, palta.id, operator_user.id, "3", created_at=now
+        db_session, order.id, palta.id, cocinero_user.id, "3", created_at=now
     )
 
     # Completed count.
-    count = _make_count(db_session, operator_user.id, completed_at=now)
+    count = _make_count(db_session, cocinero_user.id, completed_at=now)
     count.started_at = now
     count.created_at = now
     db_session.flush()
-    c_item = _make_count_item(db_session, count.id, palta.id, operator_user.id, "7", created_at=now)
+    c_item = _make_count_item(db_session, count.id, palta.id, cocinero_user.id, "7", created_at=now)
 
     today = _local_today()
     resp = await client.get(
@@ -722,7 +722,7 @@ async def test_traceability_ordered_by_date_asc(
     db_session: Session,
     owner_token: str,
     owner_user,
-    operator_user,
+    cocinero_user,
 ):
     """Events are ordered by date ascending."""
     palta = _make_product(db_session, owner_user.id, "PALTA")
@@ -736,19 +736,19 @@ async def test_traceability_ordered_by_date_asc(
     delivery.created_at = t1
     db_session.flush()
     _make_delivery_item(
-        db_session, delivery.id, palta.id, operator_user.id, "5", "5", created_at=t1
+        db_session, delivery.id, palta.id, cocinero_user.id, "5", "5", created_at=t1
     )
 
-    count = _make_count(db_session, operator_user.id, completed_at=t2)
+    count = _make_count(db_session, cocinero_user.id, completed_at=t2)
     count.started_at = t2
     count.created_at = t2
     db_session.flush()
-    _make_count_item(db_session, count.id, palta.id, operator_user.id, "12", created_at=t2)
+    _make_count_item(db_session, count.id, palta.id, cocinero_user.id, "12", created_at=t2)
 
-    order = _make_delivery_order(db_session, operator_user.id, status="completed", completed_at=t3)
+    order = _make_delivery_order(db_session, cocinero_user.id, status="completed", completed_at=t3)
     order.created_at = t3
     db_session.flush()
-    _make_delivery_order_item(db_session, order.id, palta.id, operator_user.id, "2", created_at=t3)
+    _make_delivery_order_item(db_session, order.id, palta.id, cocinero_user.id, "2", created_at=t3)
 
     today = _local_today()
     resp = await client.get(
@@ -768,7 +768,7 @@ async def test_traceability_includes_corrections(
     db_session: Session,
     owner_token: str,
     owner_user,
-    operator_user,
+    cocinero_user,
 ):
     """Traceability includes both the original and the correction row."""
     palta = _make_product(db_session, owner_user.id, "PALTA")
@@ -779,10 +779,10 @@ async def test_traceability_includes_corrections(
     db_session.flush()
 
     original = _make_delivery_item(
-        db_session, delivery.id, palta.id, operator_user.id, "10", "10", created_at=now
+        db_session, delivery.id, palta.id, cocinero_user.id, "10", "10", created_at=now
     )
     correction = _make_delivery_item(
-        db_session, delivery.id, palta.id, operator_user.id, "10", "8",
+        db_session, delivery.id, palta.id, cocinero_user.id, "10", "8",
         corrects_id=original.id, created_at=now
     )
 
@@ -806,14 +806,14 @@ async def test_traceability_includes_corrections(
 async def test_traceability_operator_returns_403(
     client: AsyncClient,
     db_session: Session,
-    operator_token: str,
+    cocinero_token: str,
     owner_user,
 ):
     palta = _make_product(db_session, owner_user.id, "PALTA")
     today = _local_today()
     resp = await client.get(
         f"{_BASE}/traceability/{palta.id}?from={today}&to={today}",
-        headers=_auth(operator_token),
+        headers=_auth(cocinero_token),
     )
     assert resp.status_code == 403
 
@@ -843,7 +843,7 @@ async def test_export_csv_bom_utf8(
     db_session: Session,
     owner_token: str,
     owner_user,
-    operator_user,
+    cocinero_user,
 ):
     """CSV starts with UTF-8 BOM (\xef\xbb\xbf)."""
     today = _local_today()
@@ -863,7 +863,7 @@ async def test_export_csv_content_type(
     db_session: Session,
     owner_token: str,
     owner_user,
-    operator_user,
+    cocinero_user,
 ):
     """Content-Type must be text/csv; charset=utf-8."""
     today = _local_today()
@@ -901,7 +901,7 @@ async def test_export_csv_includes_all_rows_original_and_corrections(
     db_session: Session,
     owner_token: str,
     owner_user,
-    operator_user,
+    cocinero_user,
 ):
     """CSV must include both the original row and the correction row."""
     palta = _make_product(db_session, owner_user.id, "PALTA")
@@ -912,10 +912,10 @@ async def test_export_csv_includes_all_rows_original_and_corrections(
     db_session.flush()
 
     original = _make_delivery_item(
-        db_session, delivery.id, palta.id, operator_user.id, "10", "10", created_at=now
+        db_session, delivery.id, palta.id, cocinero_user.id, "10", "10", created_at=now
     )
     correction = _make_delivery_item(
-        db_session, delivery.id, palta.id, operator_user.id, "10", "8",
+        db_session, delivery.id, palta.id, cocinero_user.id, "10", "8",
         corrects_id=original.id, created_at=now
     )
 
@@ -936,7 +936,7 @@ async def test_export_csv_filter_by_type_delivery(
     db_session: Session,
     owner_token: str,
     owner_user,
-    operator_user,
+    cocinero_user,
 ):
     """type=delivery returns only delivery_item rows, not count or order rows."""
     palta = _make_product(db_session, owner_user.id, "PALTA")
@@ -948,15 +948,15 @@ async def test_export_csv_filter_by_type_delivery(
     delivery.created_at = now
     db_session.flush()
     d_item = _make_delivery_item(
-        db_session, delivery.id, palta.id, operator_user.id, "10", "10", created_at=now
+        db_session, delivery.id, palta.id, cocinero_user.id, "10", "10", created_at=now
     )
 
     # Count item.
-    count = _make_count(db_session, operator_user.id, completed_at=now)
+    count = _make_count(db_session, cocinero_user.id, completed_at=now)
     count.started_at = now
     count.created_at = now
     db_session.flush()
-    c_item = _make_count_item(db_session, count.id, palta.id, operator_user.id, "5", created_at=now)
+    c_item = _make_count_item(db_session, count.id, palta.id, cocinero_user.id, "5", created_at=now)
 
     today = _local_today()
     resp = await client.get(
@@ -979,12 +979,12 @@ async def test_export_csv_filter_by_type_delivery(
 @pytest.mark.asyncio
 async def test_export_csv_operator_returns_403(
     client: AsyncClient,
-    operator_token: str,
+    cocinero_token: str,
 ):
     today = _local_today()
     resp = await client.get(
         f"{_BASE}/export?from={today}&to={today}",
-        headers=_auth(operator_token),
+        headers=_auth(cocinero_token),
     )
     assert resp.status_code == 403
 
@@ -1005,7 +1005,7 @@ async def test_export_csv_sanitizes_formula_injection(
     db_session: Session,
     owner_token: str,
     owner_user,
-    operator_user,
+    cocinero_user,
 ):
     """Fields starting with formula prefixes (=, +, -, @) must be prefixed with
     a single quote so that Excel/LibreOffice treats them as plain text."""
@@ -1026,7 +1026,7 @@ async def test_export_csv_sanitizes_formula_injection(
         db_session,
         delivery.id,
         p.id,
-        operator_user.id,
+        cocinero_user.id,
         "5",
         "5",
         reason="=INJECTED()",
@@ -1065,7 +1065,7 @@ async def test_traceability_excludes_items_from_pending_orders(
     db_session: Session,
     owner_token: str,
     owner_user,
-    operator_user,
+    cocinero_user,
 ):
     """Items of a pending (photo-only) delivery order must NOT appear in
     traceability — pending orders represent unconfirmed consumption."""
@@ -1075,20 +1075,20 @@ async def test_traceability_excludes_items_from_pending_orders(
 
     # A completed order — its item SHOULD appear.
     completed_order = _make_delivery_order(
-        db_session, operator_user.id, status="completed", completed_at=now
+        db_session, cocinero_user.id, status="completed", completed_at=now
     )
     completed_order.created_at = now
     db_session.flush()
     completed_item = _make_delivery_order_item(
-        db_session, completed_order.id, palta.id, operator_user.id, "3", created_at=now
+        db_session, completed_order.id, palta.id, cocinero_user.id, "3", created_at=now
     )
 
     # A pending order — its item must NOT appear.
-    pending_order = _make_delivery_order(db_session, operator_user.id, status="pending")
+    pending_order = _make_delivery_order(db_session, cocinero_user.id, status="pending")
     pending_order.created_at = now
     db_session.flush()
     pending_item = _make_delivery_order_item(
-        db_session, pending_order.id, palta.id, operator_user.id, "7", created_at=now
+        db_session, pending_order.id, palta.id, cocinero_user.id, "7", created_at=now
     )
 
     today = _local_today()
@@ -1108,7 +1108,7 @@ async def test_traceability_excludes_items_from_no_leida_deliveries(
     db_session: Session,
     owner_token: str,
     owner_user,
-    operator_user,
+    cocinero_user,
 ):
     """Items of a non-validated delivery (no_leida) must NOT appear in
     traceability — only items from deliveries in status 'validada' count."""
@@ -1121,7 +1121,7 @@ async def test_traceability_excludes_items_from_no_leida_deliveries(
     validated.created_at = now
     db_session.flush()
     valid_item = _make_delivery_item(
-        db_session, validated.id, palta.id, operator_user.id, "10", "10", created_at=now
+        db_session, validated.id, palta.id, cocinero_user.id, "10", "10", created_at=now
     )
 
     # An unread delivery — its item must NOT appear.
@@ -1129,7 +1129,7 @@ async def test_traceability_excludes_items_from_no_leida_deliveries(
     unread.created_at = now
     db_session.flush()
     unread_item = _make_delivery_item(
-        db_session, unread.id, palta.id, operator_user.id, "20", None, created_at=now
+        db_session, unread.id, palta.id, cocinero_user.id, "20", None, created_at=now
     )
 
     today = _local_today()
@@ -1154,7 +1154,7 @@ async def test_orders_summary_uses_completion_dates(
     db_session: Session,
     owner_token: str,
     owner_user,
-    operator_user,
+    cocinero_user,
 ):
     """completed_count must count orders whose completed_at is in range.
     photo_only_count must count pending orders whose photo_at is in range.
@@ -1166,28 +1166,28 @@ async def test_orders_summary_uses_completion_dates(
 
     # Order created yesterday but completed today → must appear in today's completed_count.
     o1 = _make_delivery_order(
-        db_session, operator_user.id, status="completed", completed_at=now
+        db_session, cocinero_user.id, status="completed", completed_at=now
     )
     o1.created_at = yesterday_utc
     db_session.flush()
 
     # Order created AND completed yesterday → must NOT appear in today's completed_count.
     o2 = _make_delivery_order(
-        db_session, operator_user.id, status="completed", completed_at=yesterday_utc
+        db_session, cocinero_user.id, status="completed", completed_at=yesterday_utc
     )
     o2.created_at = yesterday_utc
     db_session.flush()
 
     # Pending order with photo taken today → must appear in today's photo_only_count.
     o3 = _make_delivery_order(
-        db_session, operator_user.id, status="pending", photo_at=now
+        db_session, cocinero_user.id, status="pending", photo_at=now
     )
     o3.created_at = yesterday_utc
     db_session.flush()
 
     # Pending order with photo taken yesterday → must NOT appear in today's photo_only_count.
     o4 = _make_delivery_order(
-        db_session, operator_user.id, status="pending", photo_at=yesterday_utc
+        db_session, cocinero_user.id, status="pending", photo_at=yesterday_utc
     )
     o4.created_at = yesterday_utc
     db_session.flush()
@@ -1235,7 +1235,7 @@ async def test_export_csv_includes_announced_qty_for_delivery_items(
     db_session: Session,
     owner_token: str,
     owner_user,
-    operator_user,
+    cocinero_user,
 ):
     """The CSV must have an 'announced_qty' column.  For delivery_item rows it
     must contain the announced quantity; for other event types it must be empty."""
@@ -1248,16 +1248,16 @@ async def test_export_csv_includes_announced_qty_for_delivery_items(
     delivery.created_at = now
     db_session.flush()
     _make_delivery_item(
-        db_session, delivery.id, palta.id, operator_user.id,
+        db_session, delivery.id, palta.id, cocinero_user.id,
         announced_qty="12", received_qty="10", created_at=now
     )
 
     # Count item (announced_qty must be empty in its row).
-    count = _make_count(db_session, operator_user.id, completed_at=now)
+    count = _make_count(db_session, cocinero_user.id, completed_at=now)
     count.started_at = now
     count.created_at = now
     db_session.flush()
-    _make_count_item(db_session, count.id, palta.id, operator_user.id, "8", created_at=now)
+    _make_count_item(db_session, count.id, palta.id, cocinero_user.id, "8", created_at=now)
 
     today = _local_today()
     resp = await client.get(
@@ -1306,7 +1306,7 @@ async def test_orders_summary_excludes_cancelled(
     db_session: Session,
     owner_token: str,
     owner_user,
-    operator_user,
+    cocinero_user,
 ):
     """A pending order that has been 'cancelled' (corrected by another order) must
     not appear in photo_only_count.  In this model, a corrector row pointing to a
@@ -1314,7 +1314,7 @@ async def test_orders_summary_excludes_cancelled(
     now = datetime.now(UTC)
 
     # Original pending order.
-    original = _make_delivery_order(db_session, operator_user.id, status="pending", photo_at=now)
+    original = _make_delivery_order(db_session, cocinero_user.id, status="pending", photo_at=now)
     original.created_at = now
     db_session.flush()
 
@@ -1325,10 +1325,10 @@ async def test_orders_summary_excludes_cancelled(
         status="pending",
         photo_url="/photos/cancel.jpg",
         photo_at=now,
-        photo_by=operator_user.id,
+        photo_by=cocinero_user.id,
         completed_at=None,
         completed_by=None,
-        created_by=operator_user.id,
+        created_by=cocinero_user.id,
         created_at=now,
         corrects_id=original.id,
     )
@@ -1359,7 +1359,7 @@ async def test_from_equals_to_covers_full_day(
     db_session: Session,
     owner_token: str,
     owner_user,
-    operator_user,
+    cocinero_user,
 ):
     """Events at 00:00:01 and 23:59:59 in the business timezone on the same day
     must both appear when from==to is that day.
@@ -1380,7 +1380,7 @@ async def test_from_equals_to_covers_full_day(
     d1.created_at = start_of_day
     db_session.flush()
     item1 = _make_delivery_item(
-        db_session, d1.id, palta.id, operator_user.id, "5", "5", created_at=start_of_day
+        db_session, d1.id, palta.id, cocinero_user.id, "5", "5", created_at=start_of_day
     )
 
     # Event at 23:59:59 local time.
@@ -1388,7 +1388,7 @@ async def test_from_equals_to_covers_full_day(
     d2.created_at = end_of_day
     db_session.flush()
     item2 = _make_delivery_item(
-        db_session, d2.id, palta.id, operator_user.id, "3", "3", created_at=end_of_day
+        db_session, d2.id, palta.id, cocinero_user.id, "3", "3", created_at=end_of_day
     )
 
     date_str = today_local.strftime("%Y-%m-%d")
@@ -1413,7 +1413,7 @@ async def test_alert_false_when_consumption_zero(
     db_session: Session,
     owner_token: str,
     owner_user,
-    operator_user,
+    cocinero_user,
 ):
     """When stock_inicio + entries_qty == stock_actual, consumption==0 and
     alert must be False (numbers add up perfectly, no leak detected)."""
@@ -1421,12 +1421,12 @@ async def test_alert_false_when_consumption_zero(
 
     # Count before range: stock_inicio = 10.
     ten_days_ago = datetime.now(UTC) - timedelta(days=10)
-    prior_count = _make_count(db_session, operator_user.id, completed_at=ten_days_ago)
+    prior_count = _make_count(db_session, cocinero_user.id, completed_at=ten_days_ago)
     prior_count.started_at = ten_days_ago
     prior_count.created_at = ten_days_ago
     db_session.flush()
     _make_count_item(
-        db_session, prior_count.id, palta.id, operator_user.id, "10", created_at=ten_days_ago
+        db_session, prior_count.id, palta.id, cocinero_user.id, "10", created_at=ten_days_ago
     )
 
     # Delivery in range: entries = 5.
@@ -1439,12 +1439,12 @@ async def test_alert_false_when_consumption_zero(
     )
 
     # Count in range: stock_actual = 15 (10 + 5 = 15, no variance).
-    count_in_range = _make_count(db_session, operator_user.id, completed_at=in_range_ts)
+    count_in_range = _make_count(db_session, cocinero_user.id, completed_at=in_range_ts)
     count_in_range.started_at = in_range_ts
     count_in_range.created_at = in_range_ts
     db_session.flush()
     _make_count_item(
-        db_session, count_in_range.id, palta.id, operator_user.id, "15", created_at=in_range_ts
+        db_session, count_in_range.id, palta.id, cocinero_user.id, "15", created_at=in_range_ts
     )
 
     today = _local_today()

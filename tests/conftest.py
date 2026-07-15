@@ -237,8 +237,13 @@ def owner_user(db_session: Session):
 
 
 @pytest.fixture
-def operator_user(db_session: Session):
-    return create_test_user(db_session, "operator", f"op-{uuid.uuid4().hex[:6]}@test.com")
+def cocinero_user(db_session: Session):
+    return create_test_user(db_session, "cocinero", f"cocinero-{uuid.uuid4().hex[:6]}@test.com")
+
+
+@pytest.fixture
+def admin_user(db_session: Session):
+    return create_test_user(db_session, "admin", f"admin-{uuid.uuid4().hex[:6]}@test.com")
 
 
 @pytest.fixture
@@ -249,7 +254,14 @@ def owner_token(owner_user) -> str:
 
 
 @pytest.fixture
-def operator_token(operator_user) -> str:
+def cocinero_token(cocinero_user) -> str:
     from cocina_control.security.tokens import create_access_token
 
-    return create_access_token(operator_user.id, operator_user.role)
+    return create_access_token(cocinero_user.id, cocinero_user.role)
+
+
+@pytest.fixture
+def admin_token(admin_user) -> str:
+    from cocina_control.security.tokens import create_access_token
+
+    return create_access_token(admin_user.id, admin_user.role)

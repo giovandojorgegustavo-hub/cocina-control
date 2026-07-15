@@ -486,7 +486,7 @@ def update_delivery(
 def open_delivery(
     delivery_id: uuid.UUID,
     session: Session = Depends(get_session),
-    current_user: User = Depends(require_role("operator")),
+    current_user: User = Depends(require_role("cocinero")),
 ) -> DeliveryDetailResponse:
     """Transition a delivery from no_leida → en_verificacion.
 
@@ -537,7 +537,7 @@ def confirm_item(
     item_id: uuid.UUID,
     body: DeliveryItemConfirm,
     session: Session = Depends(get_session),
-    current_user: User = Depends(require_role("operator")),
+    current_user: User = Depends(require_role("cocinero")),
 ) -> DeliveryItemResponse:
     """Set received_qty on a leaf item while the delivery is en_verificacion.
 
@@ -642,7 +642,7 @@ def confirm_item(
 def validate_delivery(
     delivery_id: uuid.UUID,
     session: Session = Depends(get_session),
-    current_user: User = Depends(require_role("operator")),
+    current_user: User = Depends(require_role("cocinero")),
 ) -> DeliveryDetailResponse:
     """Finalise a delivery, transitioning it from en_verificacion → validada.
 
@@ -783,7 +783,7 @@ def correct_item(
 
     # Enforce time-window for operators.
     # Anchor: delivery.validated_at (not item.created_at).  See docstring.
-    if current_user.role == "operator":
+    if current_user.role in ("cocinero", "admin"):
         if delivery.validated_at is None or not is_same_calendar_day_local(
             delivery.validated_at, now
         ):

@@ -6,11 +6,17 @@ from sqlalchemy.orm import Mapped, mapped_column
 from cocina_control.db import Base
 from cocina_control.models.base import TimestampMixin
 
-_ROLE_ENUM = sa.Enum("operator", "owner", name="user_role", create_type=True)
+_ROLE_ENUM = sa.Enum("cocinero", "owner", "admin", name="user_role", create_type=True)
 
 
 class User(Base, TimestampMixin):
-    """Application user (operator or owner).
+    """Application user (cocinero, owner, or admin).
+
+    Roles:
+    - cocinero: capture role (deliveries, inventory counts, delivery orders).
+                Never sees cost data.
+    - admin: administrative role with cost access. Cannot view the dashboard.
+    - owner: full access including the dashboard.
 
     Email uniqueness is enforced via a case-insensitive functional index
     (ix_users_email_lower) on lower(email).  The application layer MUST

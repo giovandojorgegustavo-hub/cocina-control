@@ -83,18 +83,18 @@ mayor.
 
 ---
 
-## P6 — Corrección de costo: PMP retroactivo o solo futuro
+## P6 — Corrección de costo: impacto en valuación FIFO por partidas
 
-> Si se corrige el costo de un ítem, ¿el promedio ponderado se recalcula retroactivamente o solo rige hacia adelante?
+> Si se corrige el costo de un ítem, ¿cómo afecta la valuación (FIFO por partidas)?
 
-**Cómo se resuelve en el modelo:** El modelo permite ambas semánticas. El PMP es un cálculo, no
-un valor persistido. `purchase_order_item_costs` guarda la cadena de correcciones; la semántica
-de cuál nodo usar para cada período la decide la query.
+**Cómo se resuelve en el modelo:** El modelo mantiene la cadena de correcciones de costo
+(`purchase_order_item_costs` con `corrects_id`). Cada partida se valúa con el costo VIGENTE al
+momento en que se registra la partida (join contra la hoja de la cadena de costos en ese
+tiempo). Correcciones posteriores del costo NO retrocalculan partidas ya valuadas — cada
+partida es un lote FIFO independiente con su propio costo capturado.
 
-**Dónde se resuelve la parte no-modelo:** **Decisión abierta del dueño.** Backend #3 la
-implementará. Recomendación técnica: retroactivo (coherente con append-only: el estado corregido
-ES la verdad). Si el dueño prefiere que períodos pasados no cambien, se usa el costo vigente en
-`created_at` de cada partida.
+**Dónde se resuelve la parte no-modelo:** Backend #3 y la consulta de valuación FIFO
+(agotamiento de partidas más viejas primero, requerimientos.md líneas 68-76).
 
 ---
 
@@ -118,17 +118,20 @@ es `closed_auto` o `closed_manual`. El modelo permite insertar el registro técn
 invariante de negocio la enforce el endpoint.
 
 El enum `purchase_order_status_event_type` distingue dos tipos de cierre:
-- `closed_auto`: disparado por sistema cuando el operario valida la última partida que completa la
-  orden. `created_by` puede ser operator o owner. Enforceado en DB: el trigger
+- `closed_auto`: disparado por sistema cuando el cocinero valida la última partida que completa la
+  orden. `created_by` puede ser cualquier rol. Enforceado en DB: el trigger
   `trg_purchase_order_status_events_role_check` permite cualquier rol para `closed_auto`.
-- `closed_manual`: dueño cierra la orden explícitamente. `created_by` debe ser owner. Enforceado
-  en DB: el trigger rechaza `closed_manual` si `created_by` no tiene `role='owner'`.
+- `closed_manual`: cierre explícito. `created_by` debe tener `role IN ('owner', 'admin')`.
+  Enforceado en DB: el trigger rechaza `closed_manual` si `created_by` no tiene role en
+  `('owner', 'admin')`.
 
-La distinción vive en DB via enum + trigger BEFORE INSERT para garantizar que un operario no pueda
+Lo mismo aplica a `reopened` y `annulled`: solo aceptan `role IN ('owner', 'admin')` como `created_by`.
+
+La distinción vive en DB via enum + trigger BEFORE INSERT para garantizar que un cocinero no pueda
 emitir un `closed_manual` disfrazado.
 
 **Dónde se resuelve la parte no-modelo:** Backend #2 verifica el último evento y rechaza
-`reopened` si el anterior fue `annulled`. El dueño crea una orden nueva en ese caso.
+`reopened` si el anterior fue `annulled`. El dueño o admin crea una orden nueva en ese caso.
 
 ---
 
@@ -226,14 +229,17 @@ de Backend #1.
 
 ---
 
-## P17 — PMP histórico o por período
+## P17 — Valuación de inventario: histórica o por período
 
-> ¿El promedio ponderado es acumulado histórico o por período?
+> ¿La valuación del inventario es histórica o por período?
 
-**Cómo se resuelve en el modelo:** No aplica al shape de datos. PMP es siempre cálculo.
+**Cómo se resuelve en el modelo:** Se calcula por FIFO sobre partidas remanentes. El inventario
+valuado es Σ(remanente de partida × costo de esa partida) para todas las partidas con saldo > 0
+del producto. Es siempre "estado actual" — no hay concepto de período para el cálculo del stock
+valuado.
 
-**Dónde se resuelve la parte no-modelo:** PMP histórico (acumulado desde la primera compra).
-Backend #3.
+**Dónde se resuelve la parte no-modelo:** Backend #3 hace la query FIFO. El "costo de consumo del
+período" es distinto — usa los eventos de consumo del rango.
 
 ---
 
@@ -241,10 +247,13 @@ Backend #3.
 
 > ¿Cómo se calcula el costo de consumo del período?
 
-**Cómo se resuelve en el modelo:** No aplica al shape de datos.
+**Cómo se resuelve en el modelo:** Suma del costo de todas las partidas AGOTADAS en el período
+(por consumo, ajuste de salida FIFO, o combinación). Cada agotamiento apunta a la partida
+específica (trazabilidad de qué tanda se consumió, requerimientos.md línea 71).
 
-**Dónde se resuelve la parte no-modelo:** Cálculo: consumo por diferencia × PMP por producto.
-Backend #3.
+**Dónde se resuelve la parte no-modelo:** Backend #3. Los ajustes de conteo (entrada por
+sobrante, salida FIFO por faltante) son eventos append-only definidos en requerimientos v0.5;
+la tabla concreta y sus endpoints quedan para un slice posterior (fuera de Backend #2).
 
 ---
 
@@ -282,22 +291,48 @@ imposibles (p.ej., consumo mayor que stock inicial + entradas).
 
 ---
 
-## P22 — Rol operario vs. dueño
+## P22 — Roles: cocinero, admin, dueño
 
 > ¿Cómo se distingue quién puede ver costos y quién no?
 
-**Cómo se resuelve en el modelo:** Ya existe `users.role ENUM('operator', 'owner')`. Backend #1
-ya aplica el guard en DB via triggers `BEFORE INSERT`:
+**Cómo se resuelve en el modelo:** Ya existe `users.role ENUM('cocinero', 'owner', 'admin')`.
 
-- `trg_purchase_orders_owner_creator`: exige `created_by` con `role='owner'` en `purchase_orders`.
-- `trg_purchase_order_items_owner_creator`: idem en `purchase_order_items`.
-- `trg_purchase_order_item_costs_owner_creator`: idem en `purchase_order_item_costs`.
-- `trg_purchase_order_status_events_role_check`: exige `role='owner'` para `closed_manual`,
-  `reopened` y `annulled`; permite cualquier rol válido para `closed_auto`.
+- **Cocinero**: rol de captura. Nunca ve plata; nunca puede insertar en `purchase_orders`,
+  `purchase_order_items`, `purchase_order_item_costs` (rechazado por trigger); puede insertar
+  eventos `closed_auto` (al validar partida que completa la orden).
+- **Admin**: rol administrativo sin tablero. Puede crear órdenes con costos; puede insertar
+  eventos `closed_manual`, `reopened`, `annulled` (trigger acepta owner O admin).
+- **Owner**: dueño. Mismos permisos que admin + acceso al tablero (regla enforceada en
+  Backend #3, no en este modelo).
+
+Backend #1 ya aplica el guard en DB via triggers `BEFORE INSERT`:
+
+- `trg_purchase_orders_admin_or_owner_creator`: exige `created_by` con `role IN ('owner', 'admin')` en `purchase_orders`.
+- `trg_purchase_order_items_admin_or_owner_creator`: idem en `purchase_order_items`.
+- `trg_purchase_order_item_costs_admin_or_owner_creator`: idem en `purchase_order_item_costs`.
+- `trg_purchase_order_status_events_role_check`: exige `role IN ('owner', 'admin')` para
+  `closed_manual`, `reopened` y `annulled`; permite cualquier rol para `closed_auto`.
+
+**La regla de oro** (requerimientos.md líneas 197-201, 212-216) dice que las pantallas de
+captura (verificar partida, contar, empacar) NO muestran plata para NINGÚN rol — ni siquiera
+el dueño. Backend #2 debe garantizar que ningún response de endpoints de captura incluya
+`unit_cost`, PMP, ni ningún dato monetario, independientemente del rol autenticado.
 
 **Dónde se resuelve la parte no-modelo:** Backend #2 debe seguir aplicando el guard en API-layer
-como defensa en profundidad. Cualquier ruta que exponga costo al operario es un bug crítico
-(criterio de aceptación de v0.3).
+como defensa en profundidad. Cualquier ruta que exponga costo al cocinero es un bug crítico
+(criterio de aceptación).
+
+### Alcance de admin en flujos legacy (v0.2)
+
+Admin comparte permisos operativos con el cocinero en los flujos v0.2
+(deliveries, delivery_orders, inventory): puede recibir entregas, contar
+inventario, completar pedidos, y corregir esos mismos artefactos dentro
+de la ventana de corrección. Queda sujeto a las mismas ownership checks
+que el cocinero (solo sus propios conteos/entregas en progreso).
+
+Admin NO tiene acceso al tablero (owner-only). Admin NO ve la vista
+extendida de items de inventario (corrects_id, reason) — esos siguen
+siendo owner-only para preservar el conteo ciego en captura.
 
 ---
 

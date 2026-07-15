@@ -13,6 +13,8 @@ from cocina_control.security.tokens import TokenError, decode_token
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
+RoleName = Literal["cocinero", "owner", "admin"]
+
 
 def get_current_user(
     session: Annotated[Session, Depends(get_session)],
@@ -48,17 +50,36 @@ def get_current_user(
     return user
 
 
-def require_role(role: Literal["operator", "owner"]):
+def require_role(role: RoleName):
     """Return a dependency that enforces *role* access.
 
     The role is intentionally read from the database (user.role), NOT from the
     JWT claim.  This ensures that if a user's role is downgraded (e.g. owner ->
-    operator), the change takes effect immediately on the next request without
+    cocinero), the change takes effect immediately on the next request without
     waiting for the token to expire.
     """
 
     def _dep(user: Annotated[User, Depends(get_current_user)]) -> User:
         if user.role != role:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+        return user
+
+    return _dep
+
+
+def require_any_role(*roles: RoleName):
+    """Return a dependency that allows access if the user has ANY of the given roles.
+
+    Useful for endpoints reachable by more than one role (e.g. owner or admin).
+    Same DB-first check as require_role: the role is read from the database,
+    not from the JWT claim, so role changes take effect immediately.
+    """
+    if not roles:
+        raise ValueError("require_any_role requires at least one role")
+    allowed = frozenset(roles)
+
+    def _dep(user: Annotated[User, Depends(get_current_user)]) -> User:
+        if user.role not in allowed:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
         return user
 

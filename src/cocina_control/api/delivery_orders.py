@@ -200,7 +200,7 @@ def _handle_integrity_error(exc: IntegrityError, constraint_fragment: str) -> No
 )
 def create_order(
     session: Session = Depends(get_session),
-    current_user: User = Depends(require_role("operator")),
+    current_user: User = Depends(require_role("cocinero")),
 ) -> DeliveryOrderCreatedResponse:
     """Operator creates an empty order in 'pending' status.
 
@@ -237,7 +237,7 @@ async def upload_photo(
     order_id: uuid.UUID,
     file: UploadFile,
     session: Session = Depends(get_session),
-    current_user: User = Depends(require_role("operator")),
+    current_user: User = Depends(require_role("cocinero")),
 ) -> DeliveryOrderPhotoResponse:
     """Upload a JPEG or PNG photo for a pending order.
 
@@ -325,9 +325,9 @@ def get_photo(
     order = _get_order_or_404(session, order_id)
 
     # 1. Authorize first — prevents existence oracle for operators who didn't upload.
-    if current_user.role == "operator" and order.photo_by != current_user.id:
+    if current_user.role in ("cocinero", "admin") and order.photo_by != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
-    elif current_user.role not in ("operator", "owner"):
+    elif current_user.role not in ("cocinero", "owner", "admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
     # 2. Check photo existence after auth.
@@ -426,7 +426,7 @@ def complete_order(
     order_id: uuid.UUID,
     body: DeliveryOrderComplete,
     session: Session = Depends(get_session),
-    current_user: User = Depends(require_role("operator")),
+    current_user: User = Depends(require_role("cocinero")),
 ) -> DeliveryOrderDetailResponse:
     """Mark a pending order as completed and record product items.
 
@@ -491,7 +491,7 @@ def cancel_order(
 
     Permission: operator or owner.
     """
-    if current_user.role not in ("operator", "owner"):
+    if current_user.role not in ("cocinero", "owner", "admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
     # SELECT FOR UPDATE to prevent concurrent cancellation race.
@@ -572,7 +572,7 @@ def correct_order(
     The order must be 'completed' to be corrected.
     Leaf check: cannot correct an already corrected order.
     """
-    if current_user.role not in ("operator", "owner"):
+    if current_user.role not in ("cocinero", "owner", "admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
     # SELECT FOR UPDATE to prevent concurrent correction race.
@@ -594,7 +594,7 @@ def correct_order(
     now = datetime.now(UTC)
 
     # Enforce time-window for operators.
-    if current_user.role == "operator":
+    if current_user.role in ("cocinero", "admin"):
         if order.completed_at is None or not is_same_calendar_day_local(
             order.completed_at, now
         ):
@@ -683,7 +683,7 @@ def get_order_detail(
     Items are included only for completed orders (pending orders have none).
     The reason field is populated for cancelled/corrected orders.
     """
-    if current_user.role not in ("operator", "owner"):
+    if current_user.role not in ("cocinero", "owner", "admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
     order = _get_order_or_404(session, order_id)

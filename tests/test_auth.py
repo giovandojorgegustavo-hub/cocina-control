@@ -101,7 +101,7 @@ async def test_login_nonexistent_email_returns_401(client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_login_email_case_insensitive(client: AsyncClient, db_session: Session) -> None:
     """User created with lowercase email can log in with mixed-case email."""
-    create_test_user(db_session, "operator", "juan@test.com")
+    create_test_user(db_session, "cocinero", "juan@test.com")
     reset_rate_limit("testclient")
     response = await client.post(
         "/api/v1/auth/login",
@@ -283,13 +283,13 @@ async def test_get_current_user_no_token_returns_401(client: AsyncClient) -> Non
 
 
 @pytest.mark.asyncio
-async def test_require_role_owner_rejects_operator(
-    client: AsyncClient, operator_token: str
+async def test_require_role_owner_rejects_cocinero(
+    client: AsyncClient, cocinero_token: str
 ) -> None:
-    """An operator token must be rejected by an owner-only endpoint (403)."""
+    """A cocinero token must be rejected by an owner-only endpoint (403)."""
     response = await client.get(
         "/api/v1/_test/protected-owner",
-        headers={"Authorization": f"Bearer {operator_token}"},
+        headers={"Authorization": f"Bearer {cocinero_token}"},
     )
     assert response.status_code == 403
 
@@ -324,7 +324,7 @@ async def test_role_reread_from_db_not_token(
     token = create_access_token(user.id, "owner")
 
     # Downgrade in DB
-    user.role = "operator"
+    user.role = "cocinero"
     db_session.flush()
 
     response = await client.get(
@@ -503,3 +503,59 @@ async def test_rate_limit_uses_forwarded_for_when_proxy_configured(
     app.dependency_overrides.pop(get_session, None)
     rl_reset(ip_a)
     rl_reset(ip_b)
+
+
+# ---------------------------------------------------------------------------
+# Test: require_any_role dependency (Backend #2 — 0013_three_roles)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_require_any_role_allows_admin(
+    client: AsyncClient, admin_token: str
+) -> None:
+    """An admin token must be accepted by an endpoint protected with require_any_role('owner', 'admin')."""
+    response = await client.get(
+        "/api/v1/_test/protected-admin-or-owner",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["role"] == "admin"
+
+
+@pytest.mark.asyncio
+async def test_require_any_role_allows_owner(
+    client: AsyncClient, owner_token: str
+) -> None:
+    """An owner token must be accepted by an endpoint protected with require_any_role('owner', 'admin')."""
+    response = await client.get(
+        "/api/v1/_test/protected-admin-or-owner",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["role"] == "owner"
+
+
+@pytest.mark.asyncio
+async def test_require_any_role_rejects_cocinero(
+    client: AsyncClient, cocinero_token: str
+) -> None:
+    """A cocinero token must be rejected (403) by an endpoint protected with require_any_role('owner', 'admin')."""
+    response = await client.get(
+        "/api/v1/_test/protected-admin-or-owner",
+        headers={"Authorization": f"Bearer {cocinero_token}"},
+    )
+    assert response.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Test: require_any_role construction-time validation (Backend #2 — adversarial fix)
+# ---------------------------------------------------------------------------
+
+
+def test_require_any_role_rejects_empty_args() -> None:
+    """require_any_role() with no args must raise at construction time (fail-loud)."""
+    from cocina_control.api.deps import require_any_role
+
+    with pytest.raises(ValueError, match="at least one role"):
+        require_any_role()
