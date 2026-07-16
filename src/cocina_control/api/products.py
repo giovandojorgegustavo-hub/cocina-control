@@ -23,7 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from cocina_control.api.deps import get_current_user, require_role
+from cocina_control.api.deps import get_current_user, require_any_role, require_role
 from cocina_control.db import get_session
 from cocina_control.models.product import Product
 from cocina_control.models.user import User
@@ -119,7 +119,7 @@ def list_products(
 def create_product(
     body: ProductCreate,
     session: Session = Depends(get_session),
-    current_user: User = Depends(require_role("owner")),
+    current_user: User = Depends(require_any_role("owner", "admin")),
 ) -> Product:
     """Create a new product in the catalogue.
 
