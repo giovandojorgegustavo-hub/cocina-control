@@ -123,6 +123,24 @@ async def test_create_product_owner_success(
 
 
 @pytest.mark.asyncio
+async def test_create_product_admin_success(
+    client: AsyncClient,
+    admin_token: str,
+) -> None:
+    """Admin can create a product (creacion inline desde la orden, issue #126)."""
+    response = await client.post(
+        "/api/v1/products",
+        json={"name": "papas fritas", "unit": "kg"},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["name"] == "PAPAS FRITAS"
+    assert data["unit"] == "kg"
+    assert data["is_active"] is True
+
+
+@pytest.mark.asyncio
 async def test_create_product_operator_returns_403(
     client: AsyncClient,
     cocinero_token: str,

@@ -1,13 +1,17 @@
 import { useState, useId, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useProducts } from '../lib/products'
+import { isAxiosError } from 'axios'
+import { useProducts, useCreateProduct } from '../lib/products'
 import { usePurchaseOrders, useCreatePurchaseOrder } from '../lib/purchaseOrders'
 import { useAuthWithGetters } from '../lib/auth'
 import { formatSoles } from '../lib/currency'
+import type { Product } from '../lib/types'
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+const UNIT_OPTIONS = ['kg', 'un', 'lt'] as const
 
 interface OrderItem {
   localId: string
@@ -16,10 +20,26 @@ interface OrderItem {
   unit: string
   qty: string
   cost: string
+  // true = producto que todavia no existe en el catalogo: se crea al guardar
+  isNew: boolean
 }
 
 function emptyItem(localId: string): OrderItem {
-  return { localId, product_id: '', product_name: '', unit: '', qty: '', cost: '' }
+  return {
+    localId,
+    product_id: '',
+    product_name: '',
+    unit: '',
+    qty: '',
+    cost: '',
+    isNew: false,
+  }
+}
+
+// El backend normaliza nombres a MAYUSCULAS con whitespace colapsado.
+// Usamos la misma normalizacion para detectar duplicados antes de ofrecer crear.
+function normalizeName(name: string): string {
+  return name.trim().replace(/\s+/g, ' ').toUpperCase()
 }
 
 function lineTotal(item: OrderItem): number {
@@ -36,7 +56,12 @@ function orderTotal(items: OrderItem[]): number {
 function isItemValid(item: OrderItem): boolean {
   const q = parseFloat(item.qty)
   const c = parseFloat(item.cost)
-  return item.product_id !== '' && isFinite(q) && q > 0 && isFinite(c) && c > 0
+  const amountsValid = isFinite(q) && q > 0 && isFinite(c) && c > 0
+  if (item.isNew) {
+    // producto nuevo: nombre y unidad obligatorios (la unidad es del catalogo)
+    return normalizeName(item.product_name) !== '' && item.unit !== '' && amountsValid
+  }
+  return item.product_id !== '' && amountsValid
 }
 
 // ---------------------------------------------------------------------------
@@ -54,17 +79,23 @@ interface ToastState {
 
 export function OrdenNueva() {
   const navigate = useNavigate()
-  const { userId } = useAuthWithGetters()
+  const { userId, role } = useAuthWithGetters()
   const nextId = useId()
   const nextIdRef = useRef(1)
 
-  const { data: products } = useProducts()
+  const { data: products, refetch: refetchProducts } = useProducts()
   const { data: existingOrders } = usePurchaseOrders('all', userId)
   const createMutation = useCreatePurchaseOrder()
+  const createProductMutation = useCreateProduct()
 
   const [supplierName, setSupplierName] = useState('')
   const [items, setItems] = useState<OrderItem[]>([emptyItem(`item-${nextId}-0`)])
   const [toast, setToast] = useState<ToastState>({ visible: false, message: '' })
+  const [creatingProducts, setCreatingProducts] = useState(false)
+
+  // Crear productos inline: solo owner y admin (el cocinero no llega a esta
+  // pantalla por el guard de ruta, pero la regla se explicita igual).
+  const canCreateProducts = role === 'owner' || role === 'admin'
 
   // Datalist: distinct supplier names from previous orders
   const supplierDatalistId = `suppliers-${nextId}`
@@ -72,13 +103,17 @@ export function OrdenNueva() {
     ? [...new Set(existingOrders.map((o) => o.supplier_name))]
     : []
 
-  // Product IDs already chosen — to disable duplicates in other rows
+  // Product IDs already chosen — to hide duplicates in other rows
   const chosenProductIds = new Set(items.map((i) => i.product_id).filter(Boolean))
 
   // Validate form
   const supplierValid = supplierName.trim() !== ''
   const allItemsValid = items.length > 0 && items.every(isItemValid)
-  const canSubmit = supplierValid && allItemsValid && !createMutation.isPending
+  // dos filas no pueden crear (o referenciar) el mismo nombre nuevo
+  const newNames = items.filter((i) => i.isNew).map((i) => normalizeName(i.product_name))
+  const noDuplicateNewNames = new Set(newNames).size === newNames.length
+  const busy = createMutation.isPending || creatingProducts
+  const canSubmit = supplierValid && allItemsValid && noDuplicateNewNames && !busy
 
   // Handlers
   function addItem() {
@@ -96,27 +131,67 @@ export function OrdenNueva() {
     )
   }
 
-  function handleProductSelect(localId: string, productId: string) {
-    const product = products?.find((p) => p.id === productId)
-    if (!product) {
-      updateItem(localId, { product_id: '', product_name: '', unit: '' })
-      return
-    }
-    updateItem(localId, {
-      product_id: product.id,
-      product_name: product.name,
-      unit: product.unit,
-    })
+  function showToast(message: string) {
+    setToast({ visible: true, message })
+    setTimeout(() => setToast({ visible: false, message: '' }), 5000)
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!canSubmit) return
 
+    // Paso 1: crear los productos nuevos en el catalogo (con su unidad).
+    // Cada creacion exitosa se persiste en el estado de la fila, asi un
+    // reintento tras un fallo posterior no vuelve a crear el mismo producto.
+    let resolvedItems = items
+    const pendingNew = items.filter((i) => i.isNew && i.product_id === '')
+    if (pendingNew.length > 0) {
+      setCreatingProducts(true)
+      for (const it of pendingNew) {
+        let created: Product | null = null
+        try {
+          created = await createProductMutation.mutateAsync({
+            name: it.product_name.trim(),
+            unit: it.unit,
+          })
+        } catch (err) {
+          // 409: otro usuario creo el mismo producto entre medio. Se recupera
+          // el existente por nombre y se usa SU unidad — la define quien creo
+          // el producto primero (la unidad es del catalogo).
+          if (isAxiosError(err) && err.response?.status === 409) {
+            const fresh = await refetchProducts()
+            created =
+              fresh.data?.find(
+                (p) => normalizeName(p.name) === normalizeName(it.product_name),
+              ) ?? null
+          }
+        }
+        if (!created) {
+          showToast(
+            'No se pudo crear un producto nuevo. Los datos no se perdieron — toca de nuevo para reintentar.',
+          )
+          setCreatingProducts(false)
+          return
+        }
+        const patch = {
+          product_id: created.id,
+          product_name: created.name,
+          unit: created.unit,
+          isNew: false,
+        }
+        updateItem(it.localId, patch)
+        resolvedItems = resolvedItems.map((r) =>
+          r.localId === it.localId ? { ...r, ...patch } : r,
+        )
+      }
+      setCreatingProducts(false)
+    }
+
+    // Paso 2: crear la orden con todos los product_id resueltos.
     createMutation.mutate(
       {
         supplier_name: supplierName.trim(),
-        items: items.map((i) => ({
+        items: resolvedItems.map((i) => ({
           product_id: i.product_id,
           expected_qty: parseFloat(i.qty),
           unit_cost: parseFloat(i.cost),
@@ -127,12 +202,9 @@ export function OrdenNueva() {
           navigate('/ordenes')
         },
         onError: () => {
-          setToast({
-            visible: true,
-            message:
-              'No se pudo guardar la orden. Los datos no se perdieron — toca de nuevo para reintentar.',
-          })
-          setTimeout(() => setToast({ visible: false, message: '' }), 5000)
+          showToast(
+            'No se pudo guardar la orden. Los datos no se perdieron — toca de nuevo para reintentar.',
+          )
         },
       },
     )
@@ -203,9 +275,8 @@ export function OrdenNueva() {
                   item={item}
                   products={products ?? []}
                   chosenProductIds={chosenProductIds}
-                  onProductSelect={(pid) => handleProductSelect(item.localId, pid)}
-                  onQtyChange={(v) => updateItem(item.localId, { qty: v })}
-                  onCostChange={(v) => updateItem(item.localId, { cost: v })}
+                  canCreateProducts={canCreateProducts}
+                  onChange={(patch) => updateItem(item.localId, patch)}
                   onRemove={() => removeItem(item.localId)}
                   canRemove={items.length > 1}
                 />
@@ -247,7 +318,7 @@ export function OrdenNueva() {
                 : 'bg-gray-200 text-gray-400 cursor-not-allowed',
             ].join(' ')}
           >
-            {createMutation.isPending ? 'guardando...' : 'guardar orden — abierta'}
+            {busy ? 'guardando...' : 'guardar orden — abierta'}
           </button>
         </footer>
       </form>
@@ -272,11 +343,10 @@ export function OrdenNueva() {
 
 interface ItemRowProps {
   item: OrderItem
-  products: import('../lib/types').Product[]
+  products: Product[]
   chosenProductIds: Set<string>
-  onProductSelect: (productId: string) => void
-  onQtyChange: (value: string) => void
-  onCostChange: (value: string) => void
+  canCreateProducts: boolean
+  onChange: (patch: Partial<OrderItem>) => void
   onRemove: () => void
   canRemove: boolean
 }
@@ -285,92 +355,246 @@ function ItemRow({
   item,
   products,
   chosenProductIds,
-  onProductSelect,
-  onQtyChange,
-  onCostChange,
+  canCreateProducts,
+  onChange,
   onRemove,
   canRemove,
 }: ItemRowProps) {
   const total = lineTotal(item)
 
   return (
-    <div className="grid grid-cols-[1fr_80px_80px_110px_70px_40px] gap-2 items-center bg-white border border-gray-200 px-2 py-2">
-      {/* Product select */}
-      <select
-        value={item.product_id}
-        onChange={(e) => onProductSelect(e.target.value)}
-        className="min-h-[44px] px-2 border border-gray-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 w-full"
-        aria-label="Elegir producto"
-        required
-      >
-        <option value="">elegir producto...</option>
-        {products.map((p) => (
-          <option
-            key={p.id}
-            value={p.id}
-            disabled={chosenProductIds.has(p.id) && p.id !== item.product_id}
+    <div className="bg-white border border-gray-200 px-2 py-2">
+      <div className="grid grid-cols-[1fr_80px_80px_110px_70px_40px] gap-2 items-center">
+        {/* Product: combobox (existente) o nombre fijo + badge (nuevo) */}
+        {item.isNew ? (
+          <div className="flex items-center gap-2 min-h-[44px] px-2">
+            <span className="text-sm font-semibold text-gray-900 truncate">
+              {item.product_name}
+            </span>
+            <span className="flex-shrink-0 bg-gray-900 text-white text-[10px] font-bold px-2 py-0.5 uppercase">
+              nuevo
+            </span>
+            <button
+              type="button"
+              onClick={() =>
+                onChange({ isNew: false, product_id: '', product_name: '', unit: '' })
+              }
+              className="flex-shrink-0 text-xs text-gray-500 underline active:opacity-70"
+              aria-label="Cambiar producto"
+            >
+              cambiar
+            </button>
+          </div>
+        ) : (
+          <ProductCombobox
+            value={item}
+            products={products}
+            chosenProductIds={chosenProductIds}
+            canCreateProducts={canCreateProducts}
+            onChange={onChange}
+          />
+        )}
+
+        {/* Qty */}
+        <input
+          type="number"
+          inputMode="decimal"
+          min="0.001"
+          step="any"
+          value={item.qty}
+          onChange={(e) => onChange({ qty: e.target.value })}
+          placeholder="0"
+          className="min-h-[44px] px-2 border border-gray-300 text-sm text-center focus:outline-none focus:ring-2 focus:ring-gray-900 w-full"
+          aria-label="Cantidad"
+          required
+        />
+
+        {/* Unit — readonly para existentes (viene del catalogo); select para nuevos */}
+        {item.isNew ? (
+          <select
+            value={item.unit}
+            onChange={(e) => onChange({ unit: e.target.value })}
+            className="min-h-[44px] px-1 border-2 border-gray-900 bg-white text-sm text-center focus:outline-none focus:ring-2 focus:ring-gray-900 w-full"
+            aria-label="Unidad del producto"
+            required
           >
-            {p.name}
-          </option>
-        ))}
-      </select>
+            <option value="">unidad...</option>
+            {UNIT_OPTIONS.map((u) => (
+              <option key={u} value={u}>
+                {u}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type="text"
+            readOnly
+            value={item.unit}
+            className="min-h-[44px] px-2 border border-gray-200 bg-gray-100 text-sm text-center text-gray-500 w-full"
+            aria-label="Unidad"
+            tabIndex={-1}
+          />
+        )}
 
-      {/* Qty */}
-      <input
-        type="number"
-        inputMode="decimal"
-        min="0.001"
-        step="any"
-        value={item.qty}
-        onChange={(e) => onQtyChange(e.target.value)}
-        placeholder="0"
-        className="min-h-[44px] px-2 border border-gray-300 text-sm text-center focus:outline-none focus:ring-2 focus:ring-gray-900 w-full"
-        aria-label="Cantidad"
-        required
-      />
+        {/* Cost */}
+        <input
+          type="number"
+          inputMode="decimal"
+          min="0.01"
+          step="0.01"
+          value={item.cost}
+          onChange={(e) => onChange({ cost: e.target.value })}
+          placeholder="0.00"
+          className="min-h-[44px] px-2 border border-gray-300 text-sm text-right focus:outline-none focus:ring-2 focus:ring-gray-900 w-full"
+          aria-label="Costo unitario"
+          required
+        />
 
-      {/* Unit — readonly */}
+        {/* Line total */}
+        <span className="text-sm text-gray-600 text-right tabular-nums">
+          {total > 0 ? formatSoles(total) : '—'}
+        </span>
+
+        {/* Remove */}
+        <button
+          type="button"
+          onClick={onRemove}
+          disabled={!canRemove}
+          className={[
+            'min-h-[44px] min-w-[40px] flex items-center justify-center text-lg font-bold',
+            canRemove ? 'text-gray-500 active:text-red-600' : 'text-gray-300 cursor-not-allowed',
+          ].join(' ')}
+          aria-label="Eliminar fila"
+        >
+          —
+        </button>
+      </div>
+
+      {item.isNew && (
+        <p className="text-[11px] text-gray-500 mt-1 px-2">
+          se crea en el catalogo al guardar la orden — la unidad es del producto, no de esta
+          compra
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Product combobox: tipear busca en el catalogo; si no hay match exacto, la
+// ultima opcion es crear el producto (solo owner/admin). Los parecidos se
+// muestran ANTES de ofrecer crear (anti-duplicados).
+// ---------------------------------------------------------------------------
+
+interface ProductComboboxProps {
+  value: OrderItem
+  products: Product[]
+  chosenProductIds: Set<string>
+  canCreateProducts: boolean
+  onChange: (patch: Partial<OrderItem>) => void
+}
+
+function ProductCombobox({
+  value,
+  products,
+  chosenProductIds,
+  canCreateProducts,
+  onChange,
+}: ProductComboboxProps) {
+  const [query, setQuery] = useState('')
+  const [open, setOpen] = useState(false)
+
+  const displayText = open ? query : value.product_name
+  const normalizedQuery = normalizeName(query)
+
+  const available = products.filter(
+    (p) => !chosenProductIds.has(p.id) || p.id === value.product_id,
+  )
+  const matches =
+    normalizedQuery === ''
+      ? available
+      : available.filter((p) => normalizeName(p.name).includes(normalizedQuery))
+
+  const exactMatchExists = products.some((p) => normalizeName(p.name) === normalizedQuery)
+  const showCreateOption = canCreateProducts && normalizedQuery !== '' && !exactMatchExists
+
+  function selectProduct(p: Product) {
+    onChange({ product_id: p.id, product_name: p.name, unit: p.unit, isNew: false })
+    setQuery('')
+    setOpen(false)
+  }
+
+  function selectCreate() {
+    onChange({ product_id: '', product_name: query.trim(), unit: '', isNew: true })
+    setQuery('')
+    setOpen(false)
+  }
+
+  return (
+    <div className="relative">
       <input
         type="text"
-        readOnly
-        value={item.unit}
-        className="min-h-[44px] px-2 border border-gray-200 bg-gray-100 text-sm text-center text-gray-500 w-full"
-        aria-label="Unidad"
-        tabIndex={-1}
+        role="combobox"
+        aria-expanded={open}
+        aria-label="Elegir producto"
+        placeholder="elegir producto..."
+        value={displayText}
+        onFocus={() => {
+          setQuery('')
+          setOpen(true)
+        }}
+        onBlur={() => setOpen(false)}
+        onChange={(e) => {
+          setQuery(e.target.value)
+          if (value.product_id !== '') {
+            onChange({ product_id: '', product_name: '', unit: '' })
+          }
+        }}
+        className="min-h-[44px] px-2 border border-gray-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 w-full"
+        autoComplete="off"
       />
 
-      {/* Cost */}
-      <input
-        type="number"
-        inputMode="decimal"
-        min="0.01"
-        step="0.01"
-        value={item.cost}
-        onChange={(e) => onCostChange(e.target.value)}
-        placeholder="0.00"
-        className="min-h-[44px] px-2 border border-gray-300 text-sm text-right focus:outline-none focus:ring-2 focus:ring-gray-900 w-full"
-        aria-label="Costo unitario"
-        required
-      />
+      {open && (
+        <ul
+          role="listbox"
+          className="absolute z-20 left-0 right-0 top-full mt-1 max-h-56 overflow-y-auto bg-white border-2 border-gray-900 shadow-lg"
+        >
+          {matches.map((p) => (
+            <li key={p.id} role="option" aria-selected={p.id === value.product_id}>
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  selectProduct(p)
+                }}
+                className="w-full min-h-[44px] px-3 py-2 flex justify-between items-center text-left text-sm hover:bg-gray-100 active:bg-gray-200"
+              >
+                <span className="text-gray-900">{p.name}</span>
+                <span className="text-xs text-gray-500">{p.unit}</span>
+              </button>
+            </li>
+          ))}
 
-      {/* Line total */}
-      <span className="text-sm text-gray-600 text-right tabular-nums">
-        {total > 0 ? formatSoles(total) : '—'}
-      </span>
+          {matches.length === 0 && !showCreateOption && (
+            <li className="px-3 py-2 text-sm text-gray-500">sin resultados</li>
+          )}
 
-      {/* Remove */}
-      <button
-        type="button"
-        onClick={onRemove}
-        disabled={!canRemove}
-        className={[
-          'min-h-[44px] min-w-[40px] flex items-center justify-center text-lg font-bold',
-          canRemove ? 'text-gray-500 active:text-red-600' : 'text-gray-300 cursor-not-allowed',
-        ].join(' ')}
-        aria-label="Eliminar fila"
-      >
-        —
-      </button>
+          {showCreateOption && (
+            <li role="option" aria-selected={false}>
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  selectCreate()
+                }}
+                className="w-full min-h-[44px] px-3 py-2 text-left text-sm font-bold bg-gray-900 text-white active:opacity-80"
+              >
+                + crear "{query.trim()}" como producto nuevo
+              </button>
+            </li>
+          )}
+        </ul>
+      )}
     </div>
   )
 }
