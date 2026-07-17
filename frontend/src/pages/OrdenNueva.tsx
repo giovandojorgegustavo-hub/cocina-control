@@ -28,6 +28,8 @@ interface OrderItem {
   lastCostEdit: 'unit' | 'total' | null
   // true = producto que todavia no existe en el catalogo: se crea al guardar
   isNew: boolean
+  // alta inline: marcar tambien como producto de venta (issue #140)
+  sellToo: boolean
 }
 
 function emptyItem(localId: string): OrderItem {
@@ -41,6 +43,7 @@ function emptyItem(localId: string): OrderItem {
     costTotal: '',
     lastCostEdit: null,
     isNew: false,
+    sellToo: false,
   }
 }
 
@@ -101,7 +104,7 @@ export function OrdenNueva() {
   const nextId = useId()
   const nextIdRef = useRef(1)
 
-  const { data: products, refetch: refetchProducts } = useProducts()
+  const { data: products, refetch: refetchProducts } = useProducts('purchase')
   const { data: suppliers, refetch: refetchSuppliers } = useSuppliers()
   const createMutation = useCreatePurchaseOrder()
   const createProductMutation = useCreateProduct()
@@ -198,6 +201,8 @@ export function OrdenNueva() {
           created = await createProductMutation.mutateAsync({
             name: it.product_name.trim(),
             unit: it.unit,
+            is_purchase: true,
+            is_sale: it.sellToo,
           })
         } catch (err) {
           // 409: otro usuario creo el mismo producto entre medio. Se recupera
@@ -720,10 +725,21 @@ function ItemRow({
       </div>
 
       {item.isNew && (
-        <p className="text-[11px] text-gray-500 mt-1 px-2">
-          se crea en el catalogo al guardar la orden — la unidad es del producto, no de esta
-          compra
-        </p>
+        <div className="flex items-center justify-between mt-1 px-2 gap-3">
+          <p className="text-[11px] text-gray-500">
+            se crea en el catalogo al guardar la orden — la unidad es del producto, no de
+            esta compra
+          </p>
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-700 whitespace-nowrap">
+            <input
+              type="checkbox"
+              checked={item.sellToo}
+              onChange={(e) => onChange({ sellToo: e.target.checked })}
+              className="h-4 w-4 accent-gray-900"
+            />
+            tambien se vende
+          </label>
+        </div>
       )}
     </div>
   )

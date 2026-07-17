@@ -92,6 +92,9 @@ export interface Product {
   name: string
   unit: string
   low_stock_threshold: number | null
+  // Flags independientes (issue #140): compra = insumo, venta = item de pedido.
+  is_purchase: boolean
+  is_sale: boolean
 }
 
 // ---------------------------------------------------------------------------
