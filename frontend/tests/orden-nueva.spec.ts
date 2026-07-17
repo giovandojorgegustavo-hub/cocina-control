@@ -3,12 +3,23 @@ import { makeTestJwt } from './helpers/testJwt'
 
 const ORDERS_URL = '**/api/v1/purchase-orders'
 const PRODUCTS_URL = '**/api/v1/products'
+const SUPPLIERS_URL = '**/api/v1/suppliers'
 
 const MOCK_PRODUCTS = [
   { id: 'prod-palta', name: 'PALTA', unit: 'un', low_stock_threshold: null },
   { id: 'prod-tomate', name: 'TOMATE', unit: 'kg', low_stock_threshold: null },
   { id: 'prod-cebolla', name: 'CEBOLLA', unit: 'kg', low_stock_threshold: null },
 ]
+
+const MOCK_SUPPLIERS = [
+  { id: 'sup-nunez', name: 'VERDULERIA NUÑEZ', phone: '999888777' },
+  { id: 'sup-lopez', name: 'CARNICERIA LOPEZ', phone: null },
+]
+
+// Normalisation used by the backend: strip + collapse + UPPER
+function normalizeSupplierName(name: string): string {
+  return name.trim().replace(/\s+/g, ' ').toUpperCase()
+}
 
 async function injectOwnerToken(page: import('@playwright/test').Page) {
   const token = makeTestJwt('owner')
@@ -34,7 +45,28 @@ async function setupMocks(page: import('@playwright/test').Page) {
       body: JSON.stringify(MOCK_PRODUCTS),
     })
   })
-  // purchase-orders GET for datalist (existing orders)
+  // suppliers registry: empty by default; POST echoes back a created supplier
+  await page.route(SUPPLIERS_URL, (route) => {
+    if (route.request().method() === 'POST') {
+      const body = JSON.parse(route.request().postData() ?? '{}') as {
+        name: string
+        phone?: string
+      }
+      route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: `sup-${normalizeSupplierName(body.name).toLowerCase().replace(/\s+/g, '-')}`,
+          name: normalizeSupplierName(body.name),
+          phone: body.phone ?? null,
+          is_active: true,
+        }),
+      })
+    } else {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
+    }
+  })
+  // purchase-orders GET for existing orders
   await page.route('**/api/v1/purchase-orders?*', (route) => {
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
   })
@@ -55,6 +87,14 @@ async function pickProduct(
 ) {
   await page.getByLabel('Elegir producto').nth(nth).click()
   await page.getByRole('option', { name }).click()
+}
+
+// Supplier helper: type a name in the supplier combobox and press Enter,
+// which marks it as a NEW supplier (created on save).
+async function typeNewSupplier(page: import('@playwright/test').Page, name: string) {
+  const combo = page.getByLabel('Proveedor')
+  await combo.fill(name)
+  await combo.press('Enter')
 }
 
 // ---------------------------------------------------------------------------
@@ -94,7 +134,7 @@ test('test_orden_nueva_happy_path', async ({ page }) => {
   await page.goto('/ordenes/nueva')
 
   // Fill supplier
-  await page.getByLabel('Proveedor').fill('Verduleria Test')
+  await typeNewSupplier(page, 'Verduleria Test')
 
   // Select product PALTA via combobox
   await pickProduct(page, /PALTA/)
@@ -117,7 +157,7 @@ test('test_orden_nueva_happy_path', async ({ page }) => {
     supplier_name: string
     items: Array<{ product_id: string; expected_qty: number; unit_cost: number }>
   }
-  expect(body.supplier_name).toBe('Verduleria Test')
+  expect(body.supplier_name).toBe('VERDULERIA TEST')
   expect(body.items).toHaveLength(1)
   expect(body.items[0].product_id).toBe('prod-palta')
   expect(body.items[0].expected_qty).toBe(30)
@@ -154,7 +194,7 @@ test('test_orden_nueva_submit_disabled_without_items', async ({ page }) => {
   await page.goto('/ordenes/nueva')
 
   // Supplier filled but item row is empty
-  await page.getByLabel('Proveedor').fill('Proveedor Test')
+  await typeNewSupplier(page, 'Proveedor Test')
 
   const submitBtn = page.getByRole('button', { name: /guardar orden/i })
   await expect(submitBtn).toBeDisabled()
@@ -182,7 +222,7 @@ test('test_orden_nueva_server_error_shows_toast_and_preserves_data', async ({ pa
 
   await page.goto('/ordenes/nueva')
 
-  await page.getByLabel('Proveedor').fill('Proveedor Error')
+  await typeNewSupplier(page, 'Proveedor Error')
   await pickProduct(page, /PALTA/)
   await page.getByLabel('Cantidad').fill('5')
   await page.getByLabel('Costo unitario').fill('3.00')
@@ -195,7 +235,7 @@ test('test_orden_nueva_server_error_shows_toast_and_preserves_data', async ({ pa
   await expect(page.getByRole('alert')).toContainText(/No se pudo guardar la orden/i)
 
   // Data must be preserved — supplier name still visible
-  await expect(page.getByLabel('Proveedor')).toHaveValue('Proveedor Error')
+  await expect(page.getByLabel('Proveedor')).toHaveValue('PROVEEDOR ERROR')
 
   // Still on same page
   await expect(page).toHaveURL('/ordenes/nueva')
@@ -322,7 +362,7 @@ test('test_add_remove_add_does_not_collide_localids', async ({ page }) => {
   await page.getByLabel('Costo unitario').fill('8.50')
 
   // Step 5: fill supplier and submit
-  await page.getByLabel('Proveedor').fill('Test')
+  await typeNewSupplier(page, 'Test')
   await page.getByRole('button', { name: /guardar orden/i }).click()
 
   await expect(page).toHaveURL('/ordenes', { timeout: 5000 })
@@ -334,6 +374,150 @@ test('test_add_remove_add_does_not_collide_localids', async ({ page }) => {
   }
   expect(body.items).toHaveLength(1)
   expect(body.items[0].product_id).toBe('prod-pollo')
+})
+
+// ---------------------------------------------------------------------------
+// test_proveedor_existente_se_elige_sin_repostear (issue #129)
+// Picking a supplier from the registry uses its name and does NOT create it.
+// ---------------------------------------------------------------------------
+
+test('test_proveedor_existente_se_elige_sin_repostear', async ({ page }) => {
+  await injectOwnerToken(page)
+  await setupMocks(page)
+
+  let suppliersPosted = 0
+  await page.route(SUPPLIERS_URL, (route) => {
+    if (route.request().method() === 'POST') {
+      suppliersPosted += 1
+      route.fulfill({ status: 500, contentType: 'application/json', body: '{}' })
+    } else {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(MOCK_SUPPLIERS),
+      })
+    }
+  })
+
+  const orderPostBodies: string[] = []
+  await page.route(ORDERS_URL, (route) => {
+    if (route.request().method() === 'POST') {
+      orderPostBodies.push(route.request().postData() ?? '')
+      route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: 'new-order-id',
+          supplier_name: 'VERDULERIA NUÑEZ',
+          created_at: new Date().toISOString(),
+          created_by_name: 'Test',
+          derived_status: 'open',
+          items: [],
+          total_ordered: '12.00',
+          total_received: '0',
+          pending_amount: '12.00',
+          partida_count: 0,
+        }),
+      })
+    } else {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
+    }
+  })
+
+  await page.goto('/ordenes/nueva')
+
+  // Pick the existing supplier from the registry (shows phone as hint)
+  await page.getByLabel('Proveedor').click()
+  await page.getByRole('option', { name: /VERDULERIA NUÑEZ/ }).click()
+  await expect(page.getByLabel('Proveedor')).toHaveValue('VERDULERIA NUÑEZ')
+
+  await pickProduct(page, /PALTA/)
+  await page.getByLabel('Cantidad').fill('4')
+  await page.getByLabel('Costo unitario').fill('3.00')
+
+  await page.getByRole('button', { name: /guardar orden/i }).click()
+  await expect(page).toHaveURL('/ordenes', { timeout: 5000 })
+
+  expect(suppliersPosted).toBe(0)
+  const body = JSON.parse(orderPostBodies[0]) as { supplier_name: string }
+  expect(body.supplier_name).toBe('VERDULERIA NUÑEZ')
+})
+
+// ---------------------------------------------------------------------------
+// test_proveedor_nuevo_con_telefono (issue #129)
+// A new supplier typed in the combobox is created on save with its phone.
+// ---------------------------------------------------------------------------
+
+test('test_proveedor_nuevo_con_telefono', async ({ page }) => {
+  await injectOwnerToken(page)
+  await setupMocks(page)
+
+  const supplierPostBodies: string[] = []
+  await page.route(SUPPLIERS_URL, (route) => {
+    if (route.request().method() === 'POST') {
+      supplierPostBodies.push(route.request().postData() ?? '')
+      route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: 'sup-nuevo',
+          name: 'MERCADO CENTRAL',
+          phone: '987654321',
+          is_active: true,
+        }),
+      })
+    } else {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
+    }
+  })
+
+  const orderPostBodies: string[] = []
+  await page.route(ORDERS_URL, (route) => {
+    if (route.request().method() === 'POST') {
+      orderPostBodies.push(route.request().postData() ?? '')
+      route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: 'new-order-id',
+          supplier_name: 'MERCADO CENTRAL',
+          created_at: new Date().toISOString(),
+          created_by_name: 'Test',
+          derived_status: 'open',
+          items: [],
+          total_ordered: '12.00',
+          total_received: '0',
+          pending_amount: '12.00',
+          partida_count: 0,
+        }),
+      })
+    } else {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
+    }
+  })
+
+  await page.goto('/ordenes/nueva')
+
+  // Type a new supplier and press Enter — badge NUEVO + optional phone field
+  await typeNewSupplier(page, 'mercado central')
+  await expect(page.getByText('nuevo', { exact: true })).toBeVisible()
+  await page.getByLabel('Telefono del proveedor').fill('987654321')
+
+  await pickProduct(page, /PALTA/)
+  await page.getByLabel('Cantidad').fill('4')
+  await page.getByLabel('Costo unitario').fill('3.00')
+
+  await page.getByRole('button', { name: /guardar orden/i }).click()
+  await expect(page).toHaveURL('/ordenes', { timeout: 5000 })
+
+  // Supplier created with name + phone; order carries the normalised name
+  expect(supplierPostBodies).toHaveLength(1)
+  const supplierBody = JSON.parse(supplierPostBodies[0]) as { name: string; phone?: string }
+  expect(supplierBody.name).toBe('mercado central')
+  expect(supplierBody.phone).toBe('987654321')
+
+  const orderBody = JSON.parse(orderPostBodies[0]) as { supplier_name: string }
+  expect(orderBody.supplier_name).toBe('MERCADO CENTRAL')
 })
 
 // ---------------------------------------------------------------------------
@@ -450,7 +634,7 @@ test('test_costo_total_deriva_unitario', async ({ page }) => {
 
   await page.goto('/ordenes/nueva')
 
-  await page.getByLabel('Proveedor').fill('Test')
+  await typeNewSupplier(page, 'Test')
   await pickProduct(page, /PALTA/)
   await page.getByLabel('Cantidad').fill('4')
 
@@ -616,14 +800,14 @@ test('test_crear_producto_inline_happy_path', async ({ page }) => {
 
   await page.goto('/ordenes/nueva')
 
-  await page.getByLabel('Proveedor').fill('Verduleria Test')
+  await typeNewSupplier(page, 'Verduleria Test')
 
   // Type a product that does not exist and pick the create option
   await page.getByLabel('Elegir producto').fill('papas fritas')
   await page.getByRole('option', { name: /crear "papas fritas"/ }).click()
 
-  // The row shows the NUEVO badge and the unit selector
-  await expect(page.getByText('nuevo', { exact: true })).toBeVisible()
+  // Two NUEVO badges now: the supplier and the product
+  await expect(page.getByText('nuevo', { exact: true })).toHaveCount(2)
   const unitSelect = page.getByLabel('Unidad del producto')
   await expect(unitSelect).toBeVisible()
 
@@ -722,7 +906,7 @@ test('test_crear_producto_409_recupera_existente', async ({ page }) => {
 
   await page.goto('/ordenes/nueva')
 
-  await page.getByLabel('Proveedor').fill('Test')
+  await typeNewSupplier(page, 'Test')
   await page.getByLabel('Elegir producto').fill('papas fritas')
   await page.getByRole('option', { name: /crear "papas fritas"/ }).click()
   await page.getByLabel('Unidad del producto').selectOption('kg')
@@ -778,7 +962,7 @@ test('test_crear_producto_error_preserva_datos', async ({ page }) => {
 
   await page.goto('/ordenes/nueva')
 
-  await page.getByLabel('Proveedor').fill('Proveedor Error')
+  await typeNewSupplier(page, 'Proveedor Error')
   await page.getByLabel('Elegir producto').fill('papas fritas')
   await page.getByRole('option', { name: /crear "papas fritas"/ }).click()
   await page.getByLabel('Unidad del producto').selectOption('kg')
@@ -794,8 +978,8 @@ test('test_crear_producto_error_preserva_datos', async ({ page }) => {
   // The order must NOT have been posted
   expect(orderPosted).toBe(false)
 
-  // Data preserved: still on the page, supplier intact, NUEVO row intact
+  // Data preserved: still on the page. El proveedor ya se creo (paso 0
+  // exitoso, su badge desaparece); el producto NUEVO sigue pendiente.
   await expect(page).toHaveURL('/ordenes/nueva')
-  await expect(page.getByLabel('Proveedor')).toHaveValue('Proveedor Error')
-  await expect(page.getByText('nuevo', { exact: true })).toBeVisible()
+  await expect(page.getByText('nuevo', { exact: true })).toHaveCount(1)
 })
