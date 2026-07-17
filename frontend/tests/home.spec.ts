@@ -25,7 +25,7 @@ test('test_home_renders_three_big_buttons', async ({ page }) => {
   // Verify the three buttons exist with the correct text
   await expect(page.getByRole('button', { name: /ENTRADA/i })).toBeVisible()
   await expect(page.getByRole('button', { name: /INVENTARIO/i })).toBeVisible()
-  await expect(page.getByRole('button', { name: /PEDIDO/i })).toBeVisible()
+  await expect(page.getByRole('button', { name: /^PEDIDO/ })).toBeVisible()
 })
 
 // ---------------------------------------------------------------------------
@@ -39,7 +39,7 @@ test('test_home_button_touch_target_min_48px', async ({ page }) => {
   const buttons = [
     page.getByRole('button', { name: /ENTRADA/i }),
     page.getByRole('button', { name: /INVENTARIO/i }),
-    page.getByRole('button', { name: /PEDIDO/i }),
+    page.getByRole('button', { name: /^PEDIDO/ }),
   ]
 
   for (const button of buttons) {
@@ -128,7 +128,7 @@ test('test_home_button_subtitles_have_parentheses', async ({ page }) => {
 
   await expect(page.getByRole('button', { name: /ENTRADA/i })).toContainText('(llegó una entrega)')
   await expect(page.getByRole('button', { name: /INVENTARIO/i })).toContainText('(contar stock)')
-  await expect(page.getByRole('button', { name: /PEDIDO/i })).toContainText('(foto al empacar)')
+  await expect(page.getByRole('button', { name: /^PEDIDO/ })).toContainText('(foto al empacar)')
 })
 
 // ---------------------------------------------------------------------------
@@ -166,7 +166,7 @@ test('test_inventario_button_navigates_to_inventario', async ({ page }) => {
 test('test_pedido_button_navigates_to_pedidos_nuevo', async ({ page }) => {
   await injectToken(page, 'operator')
   await page.goto('/')
-  await page.getByRole('button', { name: /PEDIDO/i }).click()
+  await page.getByRole('button', { name: /^PEDIDO/ }).click()
   await expect(page).toHaveURL(/\/pedidos\/nuevo/)
 })
 
@@ -182,7 +182,7 @@ test('test_home_button_touch_target_min_100px', async ({ page }) => {
   const buttons = [
     page.getByRole('button', { name: /ENTRADA/i }),
     page.getByRole('button', { name: /INVENTARIO/i }),
-    page.getByRole('button', { name: /PEDIDO/i }),
+    page.getByRole('button', { name: /^PEDIDO/ }),
   ]
 
   for (const button of buttons) {
