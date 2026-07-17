@@ -19,6 +19,7 @@ from cocina_control.api.health import router as health_router
 from cocina_control.api.inventory import router as inventory_router
 from cocina_control.api.products import router as products_router
 from cocina_control.api.purchase_orders import router as purchase_orders_router
+from cocina_control.api.suppliers import router as suppliers_router
 from cocina_control.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["127.0.0.1", "localhos
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(products_router, prefix="/api/v1")
+app.include_router(suppliers_router, prefix="/api/v1")
 app.include_router(deliveries_router, prefix="/api/v1")
 app.include_router(delivery_orders_router, prefix="/api/v1")
 app.include_router(inventory_router, prefix="/api/v1")

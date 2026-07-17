@@ -10,6 +10,7 @@ from cocina_control.models.purchase_order import (
     PurchaseOrderItemCost,
     PurchaseOrderStatusEvent,
 )
+from cocina_control.models.supplier import Supplier
 from cocina_control.models.user import User
 
 __all__ = [
@@ -24,5 +25,6 @@ __all__ = [
     "PurchaseOrderItem",
     "PurchaseOrderItemCost",
     "PurchaseOrderStatusEvent",
+    "Supplier",
     "User",
 ]

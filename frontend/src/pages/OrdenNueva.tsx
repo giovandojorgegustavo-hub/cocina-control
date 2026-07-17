@@ -2,7 +2,8 @@ import { useState, useId, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { isAxiosError } from 'axios'
 import { useProducts, useCreateProduct } from '../lib/products'
-import { usePurchaseOrders, useCreatePurchaseOrder } from '../lib/purchaseOrders'
+import { useSuppliers, useCreateSupplier, type Supplier } from '../lib/suppliers'
+import { useCreatePurchaseOrder } from '../lib/purchaseOrders'
 import { useAuthWithGetters } from '../lib/auth'
 import { formatSoles } from '../lib/currency'
 import type { Product } from '../lib/types'
@@ -84,42 +85,49 @@ interface ToastState {
 // Page
 // ---------------------------------------------------------------------------
 
+// Seleccion de proveedor: existente (id) o nuevo (isNew, se crea al guardar)
+interface SupplierSelection {
+  id: string
+  name: string
+  phone: string
+  isNew: boolean
+}
+
+const emptySupplier: SupplierSelection = { id: '', name: '', phone: '', isNew: false }
+
 export function OrdenNueva() {
   const navigate = useNavigate()
-  const { userId, role } = useAuthWithGetters()
+  const { role } = useAuthWithGetters()
   const nextId = useId()
   const nextIdRef = useRef(1)
 
   const { data: products, refetch: refetchProducts } = useProducts()
-  const { data: existingOrders } = usePurchaseOrders('all', userId)
+  const { data: suppliers, refetch: refetchSuppliers } = useSuppliers()
   const createMutation = useCreatePurchaseOrder()
   const createProductMutation = useCreateProduct()
+  const createSupplierMutation = useCreateSupplier()
 
-  const [supplierName, setSupplierName] = useState('')
+  const [supplier, setSupplier] = useState<SupplierSelection>(emptySupplier)
   const [items, setItems] = useState<OrderItem[]>([emptyItem(`item-${nextId}-0`)])
   const [toast, setToast] = useState<ToastState>({ visible: false, message: '' })
   const [creatingProducts, setCreatingProducts] = useState(false)
 
-  // Crear productos inline: solo owner y admin (el cocinero no llega a esta
-  // pantalla por el guard de ruta, pero la regla se explicita igual).
+  // Crear productos/proveedores inline: solo owner y admin (el cocinero no
+  // llega a esta pantalla por el guard de ruta, pero la regla se explicita).
   const canCreateProducts = role === 'owner' || role === 'admin'
-
-  // Datalist: distinct supplier names from previous orders
-  const supplierDatalistId = `suppliers-${nextId}`
-  const distinctSuppliers = existingOrders
-    ? [...new Set(existingOrders.map((o) => o.supplier_name))]
-    : []
 
   // Product IDs already chosen — to hide duplicates in other rows
   const chosenProductIds = new Set(items.map((i) => i.product_id).filter(Boolean))
 
-  // Validate form
-  const supplierValid = supplierName.trim() !== ''
+  // Validate form: proveedor elegido del registro o marcado para crear
+  const supplierValid =
+    supplier.name.trim() !== '' && (supplier.id !== '' || supplier.isNew)
   const allItemsValid = items.length > 0 && items.every(isItemValid)
   // dos filas no pueden crear (o referenciar) el mismo nombre nuevo
   const newNames = items.filter((i) => i.isNew).map((i) => normalizeName(i.product_name))
   const noDuplicateNewNames = new Set(newNames).size === newNames.length
-  const busy = createMutation.isPending || creatingProducts
+  const busy =
+    createMutation.isPending || creatingProducts || createSupplierMutation.isPending
   const canSubmit = supplierValid && allItemsValid && noDuplicateNewNames && !busy
 
   // Handlers
@@ -146,6 +154,36 @@ export function OrdenNueva() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!canSubmit) return
+
+    // Paso 0: crear el proveedor nuevo en el registro (si corresponde).
+    // Igual que con productos: exito persistido en el estado para que un
+    // reintento no lo re-cree; 409 recupera el existente por nombre.
+    let supplierNameResolved = supplier.name.trim()
+    if (supplier.isNew && supplier.id === '') {
+      let created: Supplier | null = null
+      try {
+        created = await createSupplierMutation.mutateAsync({
+          name: supplier.name.trim(),
+          phone: supplier.phone.trim() || undefined,
+        })
+      } catch (err) {
+        if (isAxiosError(err) && err.response?.status === 409) {
+          const fresh = await refetchSuppliers()
+          created =
+            fresh.data?.find(
+              (s) => normalizeName(s.name) === normalizeName(supplier.name),
+            ) ?? null
+        }
+      }
+      if (!created) {
+        showToast(
+          'No se pudo registrar el proveedor. Los datos no se perdieron — toca de nuevo para reintentar.',
+        )
+        return
+      }
+      setSupplier((prev) => ({ ...prev, id: created.id, name: created.name, isNew: false }))
+      supplierNameResolved = created.name
+    }
 
     // Paso 1: crear los productos nuevos en el catalogo (con su unidad).
     // Cada creacion exitosa se persiste en el estado de la fila, asi un
@@ -197,7 +235,7 @@ export function OrdenNueva() {
     // Paso 2: crear la orden con todos los product_id resueltos.
     createMutation.mutate(
       {
-        supplier_name: supplierName.trim(),
+        supplier_name: supplierNameResolved,
         items: resolvedItems.map((i) => ({
           product_id: i.product_id,
           expected_qty: parseFloat(i.qty),
@@ -235,30 +273,50 @@ export function OrdenNueva() {
 
       <form onSubmit={handleSubmit} className="flex-1 flex flex-col">
         <main className="flex-1 px-4 py-6 space-y-6 overflow-y-auto pb-40">
-          {/* Supplier */}
+          {/* Supplier — registro con combobox (issue #129) */}
           <div>
-            <label
-              htmlFor="supplier"
-              className="block text-sm font-semibold text-gray-700 mb-1"
-            >
-              Proveedor
-            </label>
-            <input
-              id="supplier"
-              type="text"
-              list={supplierDatalistId}
-              value={supplierName}
-              onChange={(e) => setSupplierName(e.target.value)}
-              placeholder="Nombre del proveedor"
-              className="w-full px-4 py-3 border border-gray-300 bg-white focus:outline-none focus:ring-2 focus:ring-gray-900 text-base"
-              autoComplete="off"
-              required
-            />
-            <datalist id={supplierDatalistId}>
-              {distinctSuppliers.map((s) => (
-                <option key={s} value={s} />
-              ))}
-            </datalist>
+            <p className="text-sm font-semibold text-gray-700 mb-1">Proveedor</p>
+            {supplier.isNew ? (
+              <div className="border-2 border-gray-900 bg-gray-50 px-3 py-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-base font-semibold text-gray-900">
+                    {supplier.name}
+                  </span>
+                  <span className="bg-gray-900 text-white text-[10px] font-bold px-2 py-0.5 uppercase">
+                    nuevo
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setSupplier(emptySupplier)}
+                    className="text-xs text-gray-500 underline active:opacity-70"
+                    aria-label="Cambiar proveedor"
+                  >
+                    cambiar
+                  </button>
+                </div>
+                <input
+                  type="tel"
+                  value={supplier.phone}
+                  onChange={(e) =>
+                    setSupplier((prev) => ({ ...prev, phone: e.target.value }))
+                  }
+                  placeholder="telefono (opcional)"
+                  className="w-full px-3 py-2 border border-gray-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
+                  aria-label="Telefono del proveedor"
+                  autoComplete="off"
+                />
+                <p className="text-[11px] text-gray-500">
+                  se registra al guardar la orden
+                </p>
+              </div>
+            ) : (
+              <SupplierCombobox
+                value={supplier}
+                suppliers={suppliers ?? []}
+                canCreate={canCreateProducts}
+                onSelect={setSupplier}
+              />
+            )}
           </div>
 
           {/* Items table */}
@@ -339,6 +397,148 @@ export function OrdenNueva() {
         >
           {toast.message}
         </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Supplier combobox: mismo patron que el de productos — tipear busca en el
+// registro; sin match exacto, la ultima opcion es registrar el proveedor.
+// ---------------------------------------------------------------------------
+
+interface SupplierComboboxProps {
+  value: SupplierSelection
+  suppliers: Supplier[]
+  canCreate: boolean
+  onSelect: (sel: SupplierSelection) => void
+}
+
+function SupplierCombobox({ value, suppliers, canCreate, onSelect }: SupplierComboboxProps) {
+  const [query, setQuery] = useState('')
+  const [open, setOpen] = useState(false)
+  const [highlight, setHighlight] = useState(0)
+
+  const displayText = open ? query : value.name
+  const normalizedQuery = normalizeName(query)
+
+  const matches =
+    normalizedQuery === ''
+      ? suppliers
+      : suppliers.filter((s) => normalizeName(s.name).includes(normalizedQuery))
+
+  const exactMatchExists = suppliers.some((s) => normalizeName(s.name) === normalizedQuery)
+  const showCreateOption = canCreate && normalizedQuery !== '' && !exactMatchExists
+
+  const optionCount = matches.length + (showCreateOption ? 1 : 0)
+  const active = optionCount > 0 ? Math.min(highlight, optionCount - 1) : -1
+
+  function selectSupplier(s: Supplier) {
+    onSelect({ id: s.id, name: s.name, phone: s.phone ?? '', isNew: false })
+    setQuery('')
+    setOpen(false)
+  }
+
+  function selectCreate() {
+    onSelect({ id: '', name: query.trim(), phone: '', isNew: true })
+    setQuery('')
+    setOpen(false)
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (!open) return
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setHighlight((h) => Math.min(h + 1, optionCount - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setHighlight((h) => Math.max(h - 1, 0))
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      if (active < 0) return
+      if (active < matches.length) {
+        selectSupplier(matches[active])
+      } else if (showCreateOption) {
+        selectCreate()
+      }
+    } else if (e.key === 'Escape') {
+      setOpen(false)
+    }
+  }
+
+  return (
+    <div className="relative">
+      <input
+        type="text"
+        role="combobox"
+        aria-expanded={open}
+        aria-label="Proveedor"
+        placeholder="buscar o registrar proveedor..."
+        value={displayText}
+        onFocus={() => {
+          setQuery('')
+          setHighlight(0)
+          setOpen(true)
+        }}
+        onBlur={() => setOpen(false)}
+        onChange={(e) => {
+          setQuery(e.target.value)
+          setHighlight(0)
+          if (value.id !== '') {
+            onSelect(emptySupplier)
+          }
+        }}
+        onKeyDown={handleKeyDown}
+        className="w-full px-4 py-3 border border-gray-300 bg-white focus:outline-none focus:ring-2 focus:ring-gray-900 text-base"
+        autoComplete="off"
+      />
+
+      {open && (
+        <ul
+          role="listbox"
+          className="absolute z-20 left-0 right-0 top-full mt-1 max-h-56 overflow-y-auto bg-white border-2 border-gray-900 shadow-lg"
+        >
+          {matches.map((s, i) => (
+            <li key={s.id} role="option" aria-selected={i === active}>
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  selectSupplier(s)
+                }}
+                className={[
+                  'w-full min-h-[44px] px-3 py-2 flex justify-between items-center text-left text-sm active:bg-gray-200',
+                  i === active ? 'bg-gray-100' : 'hover:bg-gray-100',
+                ].join(' ')}
+              >
+                <span className="text-gray-900">{s.name}</span>
+                {s.phone && <span className="text-xs text-gray-500">{s.phone}</span>}
+              </button>
+            </li>
+          ))}
+
+          {matches.length === 0 && !showCreateOption && (
+            <li className="px-3 py-2 text-sm text-gray-500">sin resultados</li>
+          )}
+
+          {showCreateOption && (
+            <li role="option" aria-selected={active === matches.length}>
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  selectCreate()
+                }}
+                className={[
+                  'w-full min-h-[44px] px-3 py-2 text-left text-sm font-bold bg-gray-900 text-white',
+                  active === matches.length ? 'opacity-80 underline' : 'active:opacity-80',
+                ].join(' ')}
+              >
+                + registrar "{query.trim()}" como proveedor nuevo
+              </button>
+            </li>
+          )}
+        </ul>
       )}
     </div>
   )
