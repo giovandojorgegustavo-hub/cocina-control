@@ -20,6 +20,11 @@ interface OrderItem {
   unit: string
   qty: string
   cost: string
+  // costo total de la linea, editable: a veces la factura solo trae el total
+  costTotal: string
+  // cual de los dos costos escribio el usuario por ultimo — ese manda al
+  // recalcular cuando cambia la cantidad
+  lastCostEdit: 'unit' | 'total' | null
   // true = producto que todavia no existe en el catalogo: se crea al guardar
   isNew: boolean
 }
@@ -32,6 +37,8 @@ function emptyItem(localId: string): OrderItem {
     unit: '',
     qty: '',
     cost: '',
+    costTotal: '',
+    lastCostEdit: null,
     isNew: false,
   }
 }
@@ -259,7 +266,7 @@ export function OrdenNueva() {
             <p className="text-sm font-semibold text-gray-700 mb-2">Productos en esta orden</p>
 
             {/* Table header — desktop only */}
-            <div className="hidden md:grid md:grid-cols-[1fr_80px_80px_120px_80px_40px] gap-2 text-xs text-gray-500 uppercase tracking-wide mb-1 px-1">
+            <div className="hidden md:grid md:grid-cols-[1fr_80px_80px_110px_90px_40px] gap-2 text-xs text-gray-500 uppercase tracking-wide mb-1 px-1">
               <span>Producto</span>
               <span>Cant.</span>
               <span>Unidad</span>
@@ -360,11 +367,41 @@ function ItemRow({
   onRemove,
   canRemove,
 }: ItemRowProps) {
-  const total = lineTotal(item)
+  // Costos bidireccionales: el usuario puede escribir el unitario O el total.
+  // El que escribio por ultimo manda; el otro se deriva. El backend siempre
+  // recibe unit_cost, asi que el unitario derivado se normaliza a 2 decimales
+  // y el total mostrado se ajusta a unitario x cantidad (fuente de verdad).
+  function deriveTotal(qtyStr: string, unitStr: string): string {
+    const q = parseFloat(qtyStr)
+    const c = parseFloat(unitStr)
+    return isFinite(q) && q > 0 && isFinite(c) && c > 0 ? (q * c).toFixed(2) : ''
+  }
+
+  function deriveUnit(qtyStr: string, totalStr: string): string {
+    const q = parseFloat(qtyStr)
+    const t = parseFloat(totalStr)
+    return isFinite(q) && q > 0 && isFinite(t) && t > 0 ? (t / q).toFixed(2) : ''
+  }
+
+  function handleUnitCostChange(v: string) {
+    onChange({ cost: v, costTotal: deriveTotal(item.qty, v), lastCostEdit: 'unit' })
+  }
+
+  function handleTotalChange(v: string) {
+    onChange({ costTotal: v, cost: deriveUnit(item.qty, v), lastCostEdit: 'total' })
+  }
+
+  function handleQtyChange(v: string) {
+    if (item.lastCostEdit === 'total') {
+      onChange({ qty: v, cost: deriveUnit(v, item.costTotal) })
+    } else {
+      onChange({ qty: v, costTotal: deriveTotal(v, item.cost) })
+    }
+  }
 
   return (
     <div className="bg-white border border-gray-200 px-2 py-2">
-      <div className="grid grid-cols-[1fr_80px_80px_110px_70px_40px] gap-2 items-center">
+      <div className="grid grid-cols-[1fr_80px_80px_110px_90px_40px] gap-2 items-center">
         {/* Product: combobox (existente) o nombre fijo + badge (nuevo) */}
         {item.isNew ? (
           <div className="flex items-center gap-2 min-h-[44px] px-2">
@@ -402,7 +439,7 @@ function ItemRow({
           min="0.001"
           step="any"
           value={item.qty}
-          onChange={(e) => onChange({ qty: e.target.value })}
+          onChange={(e) => handleQtyChange(e.target.value)}
           placeholder="0"
           className="min-h-[44px] px-2 border border-gray-300 text-sm text-center focus:outline-none focus:ring-2 focus:ring-gray-900 w-full"
           aria-label="Cantidad"
@@ -436,24 +473,33 @@ function ItemRow({
           />
         )}
 
-        {/* Cost */}
+        {/* Cost per unit */}
         <input
           type="number"
           inputMode="decimal"
           min="0.01"
           step="0.01"
           value={item.cost}
-          onChange={(e) => onChange({ cost: e.target.value })}
+          onChange={(e) => handleUnitCostChange(e.target.value)}
           placeholder="0.00"
           className="min-h-[44px] px-2 border border-gray-300 text-sm text-right focus:outline-none focus:ring-2 focus:ring-gray-900 w-full"
           aria-label="Costo unitario"
           required
         />
 
-        {/* Line total */}
-        <span className="text-sm text-gray-600 text-right tabular-nums">
-          {total > 0 ? formatSoles(total) : '—'}
-        </span>
+        {/* Line total — editable: si la factura solo trae el total, se escribe
+            aca y el unitario se deriva (total / cantidad) */}
+        <input
+          type="number"
+          inputMode="decimal"
+          min="0.01"
+          step="0.01"
+          value={item.costTotal}
+          onChange={(e) => handleTotalChange(e.target.value)}
+          placeholder="0.00"
+          className="min-h-[44px] px-2 border border-gray-300 text-sm text-right tabular-nums focus:outline-none focus:ring-2 focus:ring-gray-900 w-full"
+          aria-label="Costo total"
+        />
 
         {/* Remove */}
         <button

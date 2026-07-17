@@ -337,6 +337,111 @@ test('test_add_remove_add_does_not_collide_localids', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
+// test_costo_total_deriva_unitario (issue #131)
+// The user can type the line TOTAL; the unit cost is derived (total / qty)
+// and the order still posts unit_cost.
+// ---------------------------------------------------------------------------
+
+test('test_costo_total_deriva_unitario', async ({ page }) => {
+  await injectOwnerToken(page)
+  await setupMocks(page)
+
+  const postBodies: string[] = []
+  await page.route(ORDERS_URL, (route) => {
+    if (route.request().method() === 'POST') {
+      postBodies.push(route.request().postData() ?? '')
+      route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: 'new-order-id',
+          supplier_name: 'Test',
+          created_at: new Date().toISOString(),
+          created_by_name: 'Test',
+          derived_status: 'open',
+          items: [],
+          total_ordered: '10.00',
+          total_received: '0',
+          pending_amount: '10.00',
+          partida_count: 0,
+        }),
+      })
+    } else {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
+    }
+  })
+
+  await page.goto('/ordenes/nueva')
+
+  await page.getByLabel('Proveedor').fill('Test')
+  await pickProduct(page, /PALTA/)
+  await page.getByLabel('Cantidad').fill('4')
+
+  // Type the TOTAL — the unit cost is derived
+  await page.getByLabel('Costo total').fill('10')
+  await expect(page.getByLabel('Costo unitario')).toHaveValue('2.50')
+
+  await page.getByRole('button', { name: /guardar orden/i }).click()
+  await expect(page).toHaveURL('/ordenes', { timeout: 5000 })
+
+  const body = JSON.parse(postBodies[0]) as {
+    items: Array<{ expected_qty: number; unit_cost: number }>
+  }
+  expect(body.items[0].unit_cost).toBe(2.5)
+  expect(body.items[0].expected_qty).toBe(4)
+})
+
+// ---------------------------------------------------------------------------
+// test_costo_unitario_deriva_total (issue #131)
+// Typing the unit cost fills the total (qty x unit), as before but visible.
+// ---------------------------------------------------------------------------
+
+test('test_costo_unitario_deriva_total', async ({ page }) => {
+  await injectOwnerToken(page)
+  await setupMocks(page)
+
+  await page.goto('/ordenes/nueva')
+
+  await pickProduct(page, /PALTA/)
+  await page.getByLabel('Cantidad').fill('3')
+  await page.getByLabel('Costo unitario').fill('1.20')
+
+  await expect(page.getByLabel('Costo total')).toHaveValue('3.60')
+})
+
+// ---------------------------------------------------------------------------
+// test_cambio_cantidad_respeta_ultimo_costo_editado (issue #131)
+// If the total was the last edited field, changing qty re-derives the UNIT
+// cost (total stays); if the unit was last edited, the total re-derives.
+// ---------------------------------------------------------------------------
+
+test('test_cambio_cantidad_respeta_ultimo_costo_editado', async ({ page }) => {
+  await injectOwnerToken(page)
+  await setupMocks(page)
+
+  await page.goto('/ordenes/nueva')
+  await pickProduct(page, /PALTA/)
+
+  // Last edited: TOTAL (10) with qty 4 -> unit 2.50
+  await page.getByLabel('Cantidad').fill('4')
+  await page.getByLabel('Costo total').fill('10')
+  await expect(page.getByLabel('Costo unitario')).toHaveValue('2.50')
+
+  // Change qty to 5 -> total is the source: unit re-derives to 2.00
+  await page.getByLabel('Cantidad').fill('5')
+  await expect(page.getByLabel('Costo unitario')).toHaveValue('2.00')
+  await expect(page.getByLabel('Costo total')).toHaveValue('10')
+
+  // Now edit the UNIT cost (3) -> total re-derives to 15.00
+  await page.getByLabel('Costo unitario').fill('3')
+  await expect(page.getByLabel('Costo total')).toHaveValue('15.00')
+
+  // Change qty to 2 -> unit is the source now: total re-derives to 6.00
+  await page.getByLabel('Cantidad').fill('2')
+  await expect(page.getByLabel('Costo total')).toHaveValue('6.00')
+})
+
+// ---------------------------------------------------------------------------
 // test_combobox_sugiere_parecidos_antes_de_crear (issue #126)
 // Typing a partial name shows catalog matches AND the create option.
 // ---------------------------------------------------------------------------
