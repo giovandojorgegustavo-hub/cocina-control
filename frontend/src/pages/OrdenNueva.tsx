@@ -451,6 +451,9 @@ function ItemRow({
           <select
             value={item.unit}
             onChange={(e) => onChange({ unit: e.target.value })}
+            // el select se monta justo cuando la fila pasa a producto nuevo:
+            // el foco salta al siguiente dato obligatorio (carga sin mouse)
+            autoFocus
             className="min-h-[44px] px-1 border-2 border-gray-900 bg-white text-sm text-center focus:outline-none focus:ring-2 focus:ring-gray-900 w-full"
             aria-label="Unidad del producto"
             required
@@ -549,6 +552,7 @@ function ProductCombobox({
 }: ProductComboboxProps) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
+  const [highlight, setHighlight] = useState(0)
 
   const displayText = open ? query : value.product_name
   const normalizedQuery = normalizeName(query)
@@ -564,6 +568,10 @@ function ProductCombobox({
   const exactMatchExists = products.some((p) => normalizeName(p.name) === normalizedQuery)
   const showCreateOption = canCreateProducts && normalizedQuery !== '' && !exactMatchExists
 
+  // Opciones navegables con teclado: los matches y, al final, la de crear.
+  const optionCount = matches.length + (showCreateOption ? 1 : 0)
+  const active = optionCount > 0 ? Math.min(highlight, optionCount - 1) : -1
+
   function selectProduct(p: Product) {
     onChange({ product_id: p.id, product_name: p.name, unit: p.unit, isNew: false })
     setQuery('')
@@ -574,6 +582,29 @@ function ProductCombobox({
     onChange({ product_id: '', product_name: query.trim(), unit: '', isNew: true })
     setQuery('')
     setOpen(false)
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (!open) return
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setHighlight((h) => Math.min(h + 1, optionCount - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setHighlight((h) => Math.max(h - 1, 0))
+    } else if (e.key === 'Enter') {
+      // Enter selecciona la opcion activa (o crea) — y NUNCA envia el form
+      // mientras el dropdown esta abierto: carga rapida sin mouse.
+      e.preventDefault()
+      if (active < 0) return
+      if (active < matches.length) {
+        selectProduct(matches[active])
+      } else if (showCreateOption) {
+        selectCreate()
+      }
+    } else if (e.key === 'Escape') {
+      setOpen(false)
+    }
   }
 
   return (
@@ -587,15 +618,18 @@ function ProductCombobox({
         value={displayText}
         onFocus={() => {
           setQuery('')
+          setHighlight(0)
           setOpen(true)
         }}
         onBlur={() => setOpen(false)}
         onChange={(e) => {
           setQuery(e.target.value)
+          setHighlight(0)
           if (value.product_id !== '') {
             onChange({ product_id: '', product_name: '', unit: '' })
           }
         }}
+        onKeyDown={handleKeyDown}
         className="min-h-[44px] px-2 border border-gray-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 w-full"
         autoComplete="off"
       />
@@ -605,15 +639,18 @@ function ProductCombobox({
           role="listbox"
           className="absolute z-20 left-0 right-0 top-full mt-1 max-h-56 overflow-y-auto bg-white border-2 border-gray-900 shadow-lg"
         >
-          {matches.map((p) => (
-            <li key={p.id} role="option" aria-selected={p.id === value.product_id}>
+          {matches.map((p, i) => (
+            <li key={p.id} role="option" aria-selected={i === active}>
               <button
                 type="button"
                 onMouseDown={(e) => {
                   e.preventDefault()
                   selectProduct(p)
                 }}
-                className="w-full min-h-[44px] px-3 py-2 flex justify-between items-center text-left text-sm hover:bg-gray-100 active:bg-gray-200"
+                className={[
+                  'w-full min-h-[44px] px-3 py-2 flex justify-between items-center text-left text-sm active:bg-gray-200',
+                  i === active ? 'bg-gray-100' : 'hover:bg-gray-100',
+                ].join(' ')}
               >
                 <span className="text-gray-900">{p.name}</span>
                 <span className="text-xs text-gray-500">{p.unit}</span>
@@ -626,14 +663,17 @@ function ProductCombobox({
           )}
 
           {showCreateOption && (
-            <li role="option" aria-selected={false}>
+            <li role="option" aria-selected={active === matches.length}>
               <button
                 type="button"
                 onMouseDown={(e) => {
                   e.preventDefault()
                   selectCreate()
                 }}
-                className="w-full min-h-[44px] px-3 py-2 text-left text-sm font-bold bg-gray-900 text-white active:opacity-80"
+                className={[
+                  'w-full min-h-[44px] px-3 py-2 text-left text-sm font-bold bg-gray-900 text-white',
+                  active === matches.length ? 'opacity-80 underline' : 'active:opacity-80',
+                ].join(' ')}
               >
                 + crear "{query.trim()}" como producto nuevo
               </button>

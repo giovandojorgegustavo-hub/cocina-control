@@ -337,6 +337,83 @@ test('test_add_remove_add_does_not_collide_localids', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
+// test_enter_crea_producto_directo (issue #130)
+// Typing a new name and pressing Enter triggers the create option without
+// the mouse, and focus jumps to the unit selector.
+// ---------------------------------------------------------------------------
+
+test('test_enter_crea_producto_directo', async ({ page }) => {
+  await injectOwnerToken(page)
+  await setupMocks(page)
+
+  await page.goto('/ordenes/nueva')
+
+  const combo = page.getByLabel('Elegir producto')
+  await combo.fill('papas fritas')
+  await combo.press('Enter')
+
+  // Row switched to NEW product and focus is on the unit selector
+  await expect(page.getByText('nuevo', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('Unidad del producto')).toBeFocused()
+})
+
+// ---------------------------------------------------------------------------
+// test_enter_selecciona_primer_match (issue #130)
+// Enter with matches picks the highlighted (first) product.
+// ---------------------------------------------------------------------------
+
+test('test_enter_selecciona_primer_match', async ({ page }) => {
+  await injectOwnerToken(page)
+  await setupMocks(page)
+
+  await page.goto('/ordenes/nueva')
+
+  const combo = page.getByLabel('Elegir producto')
+  await combo.fill('pal')
+  await combo.press('Enter')
+
+  await expect(combo).toHaveValue('PALTA')
+  await expect(page.getByLabel('Unidad')).toHaveValue('un')
+})
+
+// ---------------------------------------------------------------------------
+// test_flechas_navegan_opciones (issue #130)
+// ArrowDown moves the highlight; Enter picks the highlighted option.
+// ---------------------------------------------------------------------------
+
+test('test_flechas_navegan_opciones', async ({ page }) => {
+  await injectOwnerToken(page)
+  await setupMocks(page)
+
+  await page.goto('/ordenes/nueva')
+
+  const combo = page.getByLabel('Elegir producto')
+  await combo.click()
+  // dropdown open with all products: PALTA, TOMATE, CEBOLLA
+  await combo.press('ArrowDown')
+  await combo.press('Enter')
+
+  await expect(combo).toHaveValue('TOMATE')
+})
+
+// ---------------------------------------------------------------------------
+// test_escape_cierra_dropdown (issue #130)
+// ---------------------------------------------------------------------------
+
+test('test_escape_cierra_dropdown', async ({ page }) => {
+  await injectOwnerToken(page)
+  await setupMocks(page)
+
+  await page.goto('/ordenes/nueva')
+
+  const combo = page.getByLabel('Elegir producto')
+  await combo.fill('pal')
+  await expect(page.getByRole('listbox')).toBeVisible()
+  await combo.press('Escape')
+  await expect(page.getByRole('listbox')).toHaveCount(0)
+})
+
+// ---------------------------------------------------------------------------
 // test_costo_total_deriva_unitario (issue #131)
 // The user can type the line TOTAL; the unit cost is derived (total / qty)
 // and the order still posts unit_cost.
