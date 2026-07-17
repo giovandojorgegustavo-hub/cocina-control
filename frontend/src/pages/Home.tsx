@@ -89,11 +89,17 @@ export function Home() {
         )}
       </main>
 
-      {/* Footer — Placeholder: 'ver mis registros' se implementa post-v0.2 */}
-      <footer className="bg-gray-900 flex-shrink-0 flex justify-end items-center px-4 py-3">
-        <span className="text-xs text-gray-500 cursor-not-allowed">
-          ver mis registros
-        </span>
+      {/* Footer — acceso a la bandeja de pedidos (issue #136): la bandeja
+          existia pero ninguna pantalla navegaba hacia ella */}
+      <footer className="bg-gray-900 flex-shrink-0">
+        <button
+          onClick={() => navigate('/pedidos')}
+          className="w-full min-h-[48px] px-4 py-3 flex justify-between items-center text-sm text-gray-300 active:bg-gray-700"
+          aria-label="Ver pedidos — pendientes y completados"
+        >
+          <span className="font-semibold uppercase tracking-wide">ver pedidos</span>
+          <span className="text-gray-500">pendientes y completados →</span>
+        </button>
       </footer>
     </div>
   )

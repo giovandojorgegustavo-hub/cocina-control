@@ -132,31 +132,20 @@ test('test_home_button_subtitles_have_parentheses', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// test_home_ver_mis_registros_is_not_a_link (C-3)
-// Must not be a link or fire a dialog — just inert text.
+// test_home_footer_navega_a_bandeja_pedidos (issue #136)
+// The footer is the entry point to the pedidos bandeja — before this fix the
+// bandeja existed but no screen navigated to it.
 // ---------------------------------------------------------------------------
 
-test('test_home_ver_mis_registros_is_not_a_link', async ({ page }) => {
+test('test_home_footer_navega_a_bandeja_pedidos', async ({ page }) => {
   await injectToken(page, 'operator')
-
-  // Capture any dialog that appears — if alert fires, the test fails
-  let dialogFired = false
-  page.on('dialog', (dialog) => {
-    dialogFired = true
-    void dialog.dismiss()
-  })
-
   await page.goto('/')
 
-  // Should not be a link element
-  const link = page.getByRole('link', { name: /ver mis registros/i })
-  await expect(link).toHaveCount(0)
+  const footerBtn = page.getByRole('button', { name: /ver pedidos/i })
+  await expect(footerBtn).toBeVisible()
+  await footerBtn.click()
 
-  // The text exists but clicking does nothing
-  const span = page.getByText('ver mis registros')
-  await expect(span).toBeVisible()
-  await span.click()
-  expect(dialogFired).toBe(false)
+  await expect(page).toHaveURL('/pedidos')
 })
 
 // ---------------------------------------------------------------------------
