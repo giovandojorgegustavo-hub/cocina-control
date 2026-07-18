@@ -42,6 +42,9 @@ from cocina_control.models.purchase_order import (
 )
 from cocina_control.models.user import User
 from cocina_control.schemas.purchase_order import (
+    PurchaseOrderAnnulRequest,
+    PurchaseOrderLineEditRequest,
+    PurchaseOrderLineRemoveRequest,
     PurchaseOrderReceivedPartida,
     PartidaCreate,
     PartidaDraftItem,
@@ -58,6 +61,7 @@ from cocina_control.services.purchase_orders import (
     build_pending_summary,
     compute_order_totals,
     derive_status,
+    get_active_cost,
     get_active_items,
     get_partida_count,
     get_received_qty_by_item,
@@ -320,6 +324,172 @@ def list_pending_orders(
         )
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Edicion de ordenes (issue #101) — reglas del dueño:
+#   - orden SIN recepciones: se edita todo, incluida la eliminacion de lineas
+#   - orden CON recepciones: no se desarma — se anula con motivo
+# ---------------------------------------------------------------------------
+
+
+def _assert_order_editable(session: Session, order: PurchaseOrder) -> None:
+    """La edicion de lineas solo aplica a ordenes abiertas sin recepciones."""
+    derived = derive_status(session, order.id)
+    if derived != "open":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"message": "Only open orders can be edited", "derived_status": derived},
+        )
+    if get_partida_count(session, order.id) > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"message": "Order has received partidas — annul instead of editing"},
+        )
+
+
+def _get_active_item_or_404(
+    session: Session, order: PurchaseOrder, item_id: uuid.UUID
+) -> PurchaseOrderItem:
+    active = {i.id: i for i in get_active_items(session, order.id)}
+    item = active.get(item_id)
+    if item is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order line not found or not active",
+        )
+    return item
+
+
+@router.post(
+    "/{order_id}/annul",
+    response_model=PurchaseOrderDetailResponse,
+    summary="Annul an order with mandatory reason (owner or admin)",
+)
+def annul_purchase_order(
+    order_id: uuid.UUID,
+    body: PurchaseOrderAnnulRequest,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_any_role("owner", "admin")),
+) -> PurchaseOrderDetailResponse:
+    order = _get_order_or_404(session, order_id)
+    derived = derive_status(session, order.id)
+    if derived in ("annulled", "closed"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"message": f"Order is already {derived}"},
+        )
+    event = PurchaseOrderStatusEvent(
+        id=uuid.uuid4(),
+        purchase_order_id=order.id,
+        event_type="annulled",
+        reason=body.reason,
+        created_by=current_user.id,
+    )
+    session.add(event)
+    session.flush()
+    return _build_detail_response(session, order)
+
+
+@router.post(
+    "/{order_id}/items/{item_id}/remove",
+    response_model=PurchaseOrderDetailResponse,
+    summary="Remove a line from an open order without receptions (owner or admin)",
+)
+def remove_purchase_order_line(
+    order_id: uuid.UUID,
+    item_id: uuid.UUID,
+    body: PurchaseOrderLineRemoveRequest,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_any_role("owner", "admin")),
+) -> PurchaseOrderDetailResponse:
+    order = _get_order_or_404(session, order_id)
+    _assert_order_editable(session, order)
+    item = _get_active_item_or_404(session, order, item_id)
+
+    # Correccion append-only: la cantidad copia la anterior (CHECK qty > 0);
+    # removed=true marca la linea como quitada. get_active_items la filtra.
+    removal = PurchaseOrderItem(
+        id=uuid.uuid4(),
+        purchase_order_id=order.id,
+        product_id=item.product_id,
+        expected_qty=item.expected_qty,
+        removed=True,
+        corrects_id=item.id,
+        reason=body.reason,
+        created_by=current_user.id,
+    )
+    session.add(removal)
+    session.flush()
+    return _build_detail_response(session, order)
+
+
+@router.patch(
+    "/{order_id}/items/{item_id}",
+    response_model=PurchaseOrderDetailResponse,
+    summary="Edit qty and/or unit cost of a line, append-only (owner or admin)",
+)
+def edit_purchase_order_line(
+    order_id: uuid.UUID,
+    item_id: uuid.UUID,
+    body: PurchaseOrderLineEditRequest,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_any_role("owner", "admin")),
+) -> PurchaseOrderDetailResponse:
+    order = _get_order_or_404(session, order_id)
+    _assert_order_editable(session, order)
+    item = _get_active_item_or_404(session, order, item_id)
+
+    target_item = item
+    if body.expected_qty is not None:
+        correction = PurchaseOrderItem(
+            id=uuid.uuid4(),
+            purchase_order_id=order.id,
+            product_id=item.product_id,
+            expected_qty=body.expected_qty,
+            removed=False,
+            corrects_id=item.id,
+            reason=body.reason,
+            created_by=current_user.id,
+        )
+        session.add(correction)
+        session.flush()
+        target_item = correction
+        # La cadena de costos vive por item: el item nuevo arranca su cadena
+        # copiando el costo vigente (o el editado en este mismo request).
+        new_cost = body.unit_cost if body.unit_cost is not None else get_active_cost(session, item.id)
+        session.add(
+            PurchaseOrderItemCost(
+                id=uuid.uuid4(),
+                purchase_order_item_id=target_item.id,
+                unit_cost=new_cost,
+                reason=body.reason,
+                created_by=current_user.id,
+            )
+        )
+        session.flush()
+    elif body.unit_cost is not None:
+        # Solo costo: correccion en la cadena de costos del item vigente.
+        all_costs = session.scalars(
+            select(PurchaseOrderItemCost).where(
+                PurchaseOrderItemCost.purchase_order_item_id == item.id
+            )
+        ).all()
+        corrected = {c.corrects_id for c in all_costs if c.corrects_id is not None}
+        leaf = next((c for c in all_costs if c.id not in corrected), None)
+        session.add(
+            PurchaseOrderItemCost(
+                id=uuid.uuid4(),
+                purchase_order_item_id=item.id,
+                unit_cost=body.unit_cost,
+                corrects_id=leaf.id if leaf else None,
+                reason=body.reason,
+                created_by=current_user.id,
+            )
+        )
+        session.flush()
+
+    return _build_detail_response(session, order)
 
 
 # ---------------------------------------------------------------------------

@@ -132,6 +132,32 @@ class PurchaseOrderListItem(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class PurchaseOrderAnnulRequest(BaseModel):
+    """POST /purchase-orders/{id}/annul — motivo obligatorio (issue #101)."""
+
+    reason: Annotated[str, Field(min_length=1, max_length=500)]
+
+
+class PurchaseOrderLineRemoveRequest(BaseModel):
+    """POST .../items/{item_id}/remove — motivo opcional (issue #101)."""
+
+    reason: Annotated[str | None, Field(default=None, max_length=500)] = None
+
+
+class PurchaseOrderLineEditRequest(BaseModel):
+    """PATCH .../items/{item_id} — edicion append-only de la linea (issue #101)."""
+
+    expected_qty: Annotated[Decimal | None, Field(default=None, gt=0)] = None
+    unit_cost: Annotated[Decimal | None, Field(default=None, gt=0)] = None
+    reason: Annotated[str | None, Field(default=None, max_length=500)] = None
+
+    @model_validator(mode="after")
+    def at_least_one_change(self) -> "PurchaseOrderLineEditRequest":
+        if self.expected_qty is None and self.unit_cost is None:
+            raise ValueError("expected_qty o unit_cost: al menos uno")
+        return self
+
+
 class PurchaseOrderReceivedPartida(BaseModel):
     """Response schema for GET /purchase-orders/received (issue #146).
 

@@ -147,3 +147,61 @@ export function useValidatePartida() {
     },
   })
 }
+
+// ---------------------------------------------------------------------------
+// Edicion de ordenes (issue #101): anular, quitar linea, editar linea
+// ---------------------------------------------------------------------------
+
+function useInvalidateOrder(id: string) {
+  const queryClient = useQueryClient()
+  return () => {
+    void queryClient.invalidateQueries({ queryKey: ['purchase-order', id] })
+    void queryClient.invalidateQueries({ queryKey: ['purchase-orders'] })
+    void queryClient.invalidateQueries({ queryKey: ['purchase-orders-pending'] })
+  }
+}
+
+export function useAnnulOrder(id: string) {
+  const invalidate = useInvalidateOrder(id)
+  return useMutation({
+    mutationFn: async (payload: { reason: string }) => {
+      const response = await apiClient.post(`/purchase-orders/${id}/annul`, payload)
+      return response.data
+    },
+    onSuccess: invalidate,
+  })
+}
+
+export function useRemoveOrderLine(id: string) {
+  const invalidate = useInvalidateOrder(id)
+  return useMutation({
+    mutationFn: async (payload: { itemId: string; reason?: string }) => {
+      const response = await apiClient.post(
+        `/purchase-orders/${id}/items/${payload.itemId}/remove`,
+        { reason: payload.reason },
+      )
+      return response.data
+    },
+    onSuccess: invalidate,
+  })
+}
+
+export function useEditOrderLine(id: string) {
+  const invalidate = useInvalidateOrder(id)
+  return useMutation({
+    mutationFn: async (payload: {
+      itemId: string
+      expected_qty?: number
+      unit_cost?: number
+      reason?: string
+    }) => {
+      const { itemId, ...body } = payload
+      const response = await apiClient.patch(
+        `/purchase-orders/${id}/items/${itemId}`,
+        body,
+      )
+      return response.data
+    },
+    onSuccess: invalidate,
+  })
+}
