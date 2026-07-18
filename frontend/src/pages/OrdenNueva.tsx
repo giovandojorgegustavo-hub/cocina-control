@@ -328,16 +328,6 @@ export function OrdenNueva() {
           <div>
             <p className="text-sm font-semibold text-gray-700 mb-2">Productos en esta orden</p>
 
-            {/* Table header — desktop only */}
-            <div className="hidden md:grid md:grid-cols-[1fr_80px_80px_110px_90px_40px] gap-2 text-xs text-gray-500 uppercase tracking-wide mb-1 px-1">
-              <span>Producto</span>
-              <span>Cant.</span>
-              <span>Unidad</span>
-              <span>Costo unit.</span>
-              <span className="text-right">Total</span>
-              <span />
-            </div>
-
             <div className="flex flex-col gap-2">
               {items.map((item) => (
                 <ItemRow
@@ -606,8 +596,11 @@ function ItemRow({
 
   return (
     <div className="bg-white border border-gray-200 px-2 py-2">
-      <div className="grid grid-cols-[1fr_80px_80px_110px_90px_40px] gap-2 items-center">
-        {/* Product: combobox (existente) o nombre fijo + badge (nuevo) */}
+      <div className="flex flex-col gap-2">
+        {/* Fila 1: producto a lo ancho + quitar — el combobox necesita ancho
+            real tambien en celular (issue #144) */}
+        <div className="flex gap-2 items-center">
+          <div className="flex-1 min-w-0">
         {item.isNew ? (
           <div className="flex items-center gap-2 min-h-[44px] px-2">
             <span className="text-sm font-semibold text-gray-900 truncate">
@@ -636,8 +629,29 @@ function ItemRow({
             onChange={onChange}
           />
         )}
+          </div>
 
-        {/* Qty */}
+          {/* Remove */}
+          <button
+            type="button"
+            onClick={onRemove}
+            disabled={!canRemove}
+            className={[
+              'min-h-[44px] min-w-[40px] flex-shrink-0 flex items-center justify-center text-lg font-bold',
+              canRemove
+                ? 'text-gray-500 active:text-red-600'
+                : 'text-gray-300 cursor-not-allowed',
+            ].join(' ')}
+            aria-label="Eliminar fila"
+          >
+            —
+          </button>
+        </div>
+
+        {/* Fila 2: numeros con etiquetas visibles en todos los tamaños */}
+        <div className="grid grid-cols-4 gap-2">
+        <div className="flex flex-col gap-1">
+        <span className="text-[10px] uppercase tracking-wide text-gray-500">cant.</span>
         <input
           type="number"
           inputMode="decimal"
@@ -651,7 +665,11 @@ function ItemRow({
           required
         />
 
+        </div>
+
         {/* Unit — readonly para existentes (viene del catalogo); select para nuevos */}
+        <div className="flex flex-col gap-1">
+        <span className="text-[10px] uppercase tracking-wide text-gray-500">unidad</span>
         {item.isNew ? (
           <select
             value={item.unit}
@@ -681,7 +699,11 @@ function ItemRow({
           />
         )}
 
+        </div>
+
         {/* Cost per unit */}
+        <div className="flex flex-col gap-1">
+        <span className="text-[10px] uppercase tracking-wide text-gray-500">costo unit.</span>
         <input
           type="number"
           inputMode="decimal"
@@ -695,8 +717,12 @@ function ItemRow({
           required
         />
 
+        </div>
+
         {/* Line total — editable: si la factura solo trae el total, se escribe
             aca y el unitario se deriva (total / cantidad) */}
+        <div className="flex flex-col gap-1">
+        <span className="text-[10px] uppercase tracking-wide text-gray-500">total</span>
         <input
           type="number"
           inputMode="decimal"
@@ -708,20 +734,8 @@ function ItemRow({
           className="min-h-[44px] px-2 border border-gray-300 text-sm text-right tabular-nums focus:outline-none focus:ring-2 focus:ring-gray-900 w-full"
           aria-label="Costo total"
         />
-
-        {/* Remove */}
-        <button
-          type="button"
-          onClick={onRemove}
-          disabled={!canRemove}
-          className={[
-            'min-h-[44px] min-w-[40px] flex items-center justify-center text-lg font-bold',
-            canRemove ? 'text-gray-500 active:text-red-600' : 'text-gray-300 cursor-not-allowed',
-          ].join(' ')}
-          aria-label="Eliminar fila"
-        >
-          —
-        </button>
+        </div>
+        </div>
       </div>
 
       {item.isNew && (
