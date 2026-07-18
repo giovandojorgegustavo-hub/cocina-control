@@ -4,6 +4,7 @@ import { Home } from './pages/Home'
 import { BandejaPartidas } from './pages/BandejaPartidas'
 import { VerificacionPartida } from './pages/VerificacionPartida'
 import { OrdenesLista } from './pages/OrdenesLista'
+import { OrdenDetalle } from './pages/OrdenDetalle'
 import { OrdenNueva } from './pages/OrdenNueva'
 import { NuevoPedido } from './pages/NuevoPedido'
 import { BandejaPedidos } from './pages/BandejaPedidos'
@@ -61,6 +62,16 @@ export const router = createBrowserRouter([
       <RequireAuth>
         <RequireAnyRole roles={['owner', 'admin']}>
           <OrdenesLista />
+        </RequireAnyRole>
+      </RequireAuth>
+    ),
+  },
+  {
+    path: '/ordenes/:id',
+    element: (
+      <RequireAuth>
+        <RequireAnyRole roles={['owner', 'admin']}>
+          <OrdenDetalle />
         </RequireAnyRole>
       </RequireAuth>
     ),

@@ -116,6 +116,8 @@ class PurchaseOrderItem(Base, AppendOnlyMixin):
         nullable=False,
     )
     expected_qty: Mapped[Decimal] = mapped_column(sa.Numeric, nullable=False)
+    # issue #101: una correccion con removed=true quita la linea de la orden
+    removed: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
     corrects_id: Mapped[uuid.UUID | None] = mapped_column(
         sa.ForeignKey("purchase_order_items.id", ondelete="RESTRICT"),
         nullable=True,

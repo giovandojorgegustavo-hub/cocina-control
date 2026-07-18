@@ -1732,3 +1732,175 @@ async def test_received_owner_returns_403(
         headers={"Authorization": f"Bearer {owner_token}"},
     )
     assert response.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Edicion de ordenes (issue #101) — reglas del dueño
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_annul_order_with_reason(
+    client: AsyncClient,
+    db_session: Session,
+    owner_token: str,
+    owner_user,
+) -> None:
+    """Anular con motivo deja la orden en estado annulled."""
+    p1 = _make_product(db_session, owner_user.id, "ANULAR PROD", unit="kg")
+    order = _make_order(db_session, owner_user.id, supplier="PROV ANULAR")
+    item = _make_po_item(db_session, order, p1, owner_user.id, expected_qty="10")
+    _make_po_cost(db_session, item, owner_user.id, unit_cost="2.00")
+    db_session.flush()
+
+    response = await client.post(
+        f"/api/v1/purchase-orders/{order.id}/annul",
+        json={"reason": "el proveedor cancelo la entrega"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["derived_status"] == "annulled"
+
+    # Doble anulacion: 409
+    again = await client.post(
+        f"/api/v1/purchase-orders/{order.id}/annul",
+        json={"reason": "otra vez"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert again.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_annul_requires_reason(
+    client: AsyncClient,
+    db_session: Session,
+    owner_token: str,
+    owner_user,
+) -> None:
+    order = _make_order(db_session, owner_user.id, supplier="PROV SIN MOTIVO")
+    db_session.flush()
+    response = await client.post(
+        f"/api/v1/purchase-orders/{order.id}/annul",
+        json={"reason": ""},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_remove_line_from_open_order(
+    client: AsyncClient,
+    db_session: Session,
+    owner_token: str,
+    owner_user,
+) -> None:
+    """Quitar linea de orden sin recepciones: append-only, sale del detalle y del total."""
+    p1 = _make_product(db_session, owner_user.id, "QUITAR A", unit="kg")
+    p2 = _make_product(db_session, owner_user.id, "QUITAR B", unit="un")
+    order = _make_order(db_session, owner_user.id, supplier="PROV QUITAR")
+    i1 = _make_po_item(db_session, order, p1, owner_user.id, expected_qty="10")
+    _make_po_cost(db_session, i1, owner_user.id, unit_cost="2.00")
+    i2 = _make_po_item(db_session, order, p2, owner_user.id, expected_qty="5")
+    _make_po_cost(db_session, i2, owner_user.id, unit_cost="1.00")
+    db_session.flush()
+
+    response = await client.post(
+        f"/api/v1/purchase-orders/{order.id}/items/{i1.id}/remove",
+        json={"reason": "no hace falta"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert response.status_code == 200
+    detail = response.json()
+    names = [i["product_name"] for i in detail["items"]]
+    assert "QUITAR A" not in names
+    assert "QUITAR B" in names
+    assert detail["total_ordered"] == "5.00"
+
+    # La linea quitada ya no es activa: quitarla de nuevo es 404
+    again = await client.post(
+        f"/api/v1/purchase-orders/{order.id}/items/{i1.id}/remove",
+        json={},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert again.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_remove_line_blocked_with_partidas(
+    client: AsyncClient,
+    db_session: Session,
+    owner_token: str,
+    owner_user,
+    cocinero_user,
+) -> None:
+    """Orden con recepciones no se desarma: 409 — se anula con motivo."""
+    p1 = _make_product(db_session, owner_user.id, "BLOQ PROD", unit="kg")
+    order = _make_order(db_session, owner_user.id, supplier="PROV BLOQ")
+    i1 = _make_po_item(db_session, order, p1, owner_user.id, expected_qty="10")
+    _make_po_cost(db_session, i1, owner_user.id, unit_cost="2.00")
+    d = _make_validated_delivery(db_session, order, cocinero_user.id)
+    _make_delivery_item(db_session, d, p1, i1, cocinero_user.id, "4", "4")
+    db_session.flush()
+
+    response = await client.post(
+        f"/api/v1/purchase-orders/{order.id}/items/{i1.id}/remove",
+        json={},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_edit_line_qty_and_cost(
+    client: AsyncClient,
+    db_session: Session,
+    owner_token: str,
+    owner_user,
+) -> None:
+    """Editar cantidad y costo crea correcciones append-only y recalcula totales."""
+    p1 = _make_product(db_session, owner_user.id, "EDITAR PROD", unit="kg")
+    order = _make_order(db_session, owner_user.id, supplier="PROV EDITAR")
+    i1 = _make_po_item(db_session, order, p1, owner_user.id, expected_qty="10")
+    _make_po_cost(db_session, i1, owner_user.id, unit_cost="2.00")
+    db_session.flush()
+
+    response = await client.patch(
+        f"/api/v1/purchase-orders/{order.id}/items/{i1.id}",
+        json={"expected_qty": 8, "unit_cost": 3, "reason": "factura real"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert response.status_code == 200
+    detail = response.json()
+    line = detail["items"][0]
+    assert line["expected_qty"] == "8"
+    assert line["unit_cost"] == "3"
+    assert detail["total_ordered"] == "24"
+
+    # Solo costo, sobre la linea vigente (id nuevo tras la correccion)
+    new_item_id = line["id"]
+    response2 = await client.patch(
+        f"/api/v1/purchase-orders/{order.id}/items/{new_item_id}",
+        json={"unit_cost": 2.5},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert response2.status_code == 200
+    assert response2.json()["total_ordered"] == "20.0"
+
+
+@pytest.mark.asyncio
+async def test_edit_line_cocinero_403(
+    client: AsyncClient,
+    db_session: Session,
+    cocinero_token: str,
+    owner_user,
+) -> None:
+    p1 = _make_product(db_session, owner_user.id, "ROL PROD", unit="kg")
+    order = _make_order(db_session, owner_user.id, supplier="PROV ROL")
+    i1 = _make_po_item(db_session, order, p1, owner_user.id, expected_qty="10")
+    db_session.flush()
+    response = await client.patch(
+        f"/api/v1/purchase-orders/{order.id}/items/{i1.id}",
+        json={"expected_qty": 5},
+        headers={"Authorization": f"Bearer {cocinero_token}"},
+    )
+    assert response.status_code == 403

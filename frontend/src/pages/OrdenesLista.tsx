@@ -83,6 +83,7 @@ interface OrderCardProps {
 }
 
 function OrderCard({ order }: OrderCardProps) {
+  const navigate = useNavigate()
   const isMuted = order.derived_status === 'closed' || order.derived_status === 'annulled'
   const isYellow = order.derived_status === 'partially_received'
 
@@ -118,8 +119,15 @@ function OrderCard({ order }: OrderCardProps) {
 
   return (
     <div
+      role="button"
+      tabIndex={0}
+      aria-label={`Ver orden de ${order.supplier_name}`}
+      onClick={() => navigate(`/ordenes/${order.id}`)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') navigate(`/ordenes/${order.id}`)
+      }}
       className={[
-        'px-4 py-4 min-h-[72px] flex flex-col gap-1',
+        'px-4 py-4 min-h-[72px] flex flex-col gap-1 cursor-pointer active:opacity-80',
         isMuted ? 'bg-gray-100 border border-gray-200' : '',
         isYellow ? 'bg-yellow-50 border border-yellow-200' : '',
         !isMuted && !isYellow ? 'bg-white border border-gray-200' : '',

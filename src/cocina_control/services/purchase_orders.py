@@ -49,7 +49,8 @@ def get_active_items(session: Session, order_id: uuid.UUID) -> list[PurchaseOrde
         return []
 
     corrected_ids = {i.corrects_id for i in all_items if i.corrects_id is not None}
-    return [i for i in all_items if i.id not in corrected_ids]
+    # issue #101: una hoja con removed=true es una linea quitada de la orden
+    return [i for i in all_items if i.id not in corrected_ids and not i.removed]
 
 
 def get_active_cost(session: Session, item_id: uuid.UUID) -> Decimal:
