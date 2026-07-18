@@ -309,6 +309,44 @@ def build_pending_summary(session: Session, order_id: uuid.UUID) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Received summary helper (issue #146)
+# ---------------------------------------------------------------------------
+
+
+def build_received_summary(session: Session, delivery_id: uuid.UUID) -> str:
+    """Resumen humano de lo recibido en una partida validada.
+
+    Ejemplo: "18 kg CERDO · 40 kg POLLO". Sin montos (pantalla de cocinero).
+    """
+    from cocina_control.models.delivery import DeliveryItem
+
+    items = session.scalars(
+        select(DeliveryItem).where(DeliveryItem.delivery_id == delivery_id)
+    ).all()
+    if not items:
+        return "sin detalle"
+
+    product_ids = list({i.product_id for i in items})
+    products: dict[uuid.UUID, Product] = {
+        p.id: p
+        for p in session.scalars(
+            select(Product).where(Product.id.in_(product_ids))
+        ).all()
+    }
+
+    parts = []
+    for item in items:
+        qty = item.received_qty if item.received_qty is not None else item.announced_qty
+        product = products.get(item.product_id)
+        unit = product.unit if product else "u"
+        name = product.name if product else str(item.product_id)
+        qty_str = f"{qty:.10f}".rstrip("0").rstrip(".")
+        parts.append(f"{qty_str} {unit} {name}")
+
+    return " · ".join(parts)
+
+
+# ---------------------------------------------------------------------------
 # Partida count helper
 # ---------------------------------------------------------------------------
 

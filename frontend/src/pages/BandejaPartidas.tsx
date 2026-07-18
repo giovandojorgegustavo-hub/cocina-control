@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { usePendingPurchaseOrders } from '../lib/purchaseOrders'
+import { usePendingPurchaseOrders, useReceivedPartidas } from '../lib/purchaseOrders'
 import { useAuthWithGetters } from '../lib/auth'
 import { formatRelativeDate } from '../lib/date'
 import { ErrorBanner } from '../components/ErrorBanner'
-import type { PurchaseOrderPendingItem } from '../lib/types'
+import type { PurchaseOrderPendingItem, PurchaseOrderReceivedPartida } from '../lib/types'
 
 // ---------------------------------------------------------------------------
 // Status badge — only open and partially_received appear in this bandeja
@@ -28,6 +28,29 @@ function StatusBadge({ status }: { status: 'open' | 'partially_received' }) {
 // ---------------------------------------------------------------------------
 // Skeleton row
 // ---------------------------------------------------------------------------
+
+
+function ReceivedRow({ partida }: { partida: PurchaseOrderReceivedPartida }) {
+  return (
+    <div className="bg-white px-4 py-3 flex items-start justify-between gap-3">
+      <div className="min-w-0">
+        <p className="text-sm font-semibold text-gray-900 truncate">
+          {partida.supplier_name}
+        </p>
+        <p className="text-xs text-gray-500 mt-0.5">
+          {partida.received_summary}
+        </p>
+        <p className="text-[11px] text-gray-400 mt-0.5">
+          {formatRelativeDate(partida.validated_at)}
+          {partida.validated_by_name ? ` · recibio ${partida.validated_by_name}` : ''}
+        </p>
+      </div>
+      <span className="flex-shrink-0 text-[10px] font-bold uppercase bg-gray-100 text-gray-600 px-2 py-1">
+        recibido
+      </span>
+    </div>
+  )
+}
 
 function SkeletonRow() {
   return (
@@ -90,6 +113,7 @@ export function BandejaPartidas() {
   const navigate = useNavigate()
   const { userId } = useAuthWithGetters()
   const { data, isLoading, isError, refetch } = usePendingPurchaseOrders(userId)
+  const { data: received } = useReceivedPartidas(userId)
   const [showError, setShowError] = useState(true)
 
   const orders = data ?? []
@@ -147,6 +171,20 @@ export function BandejaPartidas() {
                 onTap={(id) => navigate(`/entradas/${id}`)}
               />
             ))}
+          </div>
+        )}
+
+        {/* Registro de partidas recibidas (issue #146) */}
+        {received && received.length > 0 && (
+          <div className="mt-4">
+            <p className="px-4 pb-2 text-xs font-bold uppercase tracking-wide text-gray-500">
+              recibidos
+            </p>
+            <div className="flex flex-col gap-px bg-gray-300">
+              {received.map((partida) => (
+                <ReceivedRow key={partida.id} partida={partida} />
+              ))}
+            </div>
           </div>
         )}
       </main>

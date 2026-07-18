@@ -1678,3 +1678,57 @@ async def test_validate_partida_duplicate_item_ids_422(
     # Verify the validation error message references the duplicate constraint.
     detail = resp.json()["detail"]
     assert any("duplicate" in str(e).lower() for e in detail)
+
+
+# ---------------------------------------------------------------------------
+# GET /purchase-orders/received — historial de partidas (issue #146)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_received_lists_validated_partidas_newest_first(
+    client: AsyncClient,
+    db_session: Session,
+    cocinero_token: str,
+    cocinero_user,
+    owner_user,
+) -> None:
+    """El historial devuelve partidas validadas con resumen humano, sin dinero."""
+    p1 = _make_product(db_session, owner_user.id, "CERDO HISTORIAL", unit="kg")
+    order = _make_order(db_session, owner_user.id, supplier="CARNICERIA HISTORIAL")
+    poi = _make_po_item(db_session, order, p1, owner_user.id, expected_qty="30")
+    d1 = _make_validated_delivery(db_session, order, cocinero_user.id)
+    _make_delivery_item(
+        db_session, d1, p1, poi, cocinero_user.id,
+        announced_qty="18", received_qty="18",
+    )
+    db_session.flush()
+
+    response = await client.get(
+        "/api/v1/purchase-orders/received",
+        headers={"Authorization": f"Bearer {cocinero_token}"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    ours = [r for r in data if r["supplier_name"] == "CARNICERIA HISTORIAL"]
+    assert len(ours) == 1
+    partida = ours[0]
+    assert partida["received_summary"] == "18 kg CERDO HISTORIAL"
+    assert partida["validated_by_name"] == cocinero_user.name
+    assert partida["validated_at"] is not None
+    # Regla de oro: sin campos monetarios en pantallas de cocinero
+    for campo in ("unit_cost", "total_ordered", "total_received", "pending_amount"):
+        assert campo not in partida
+
+
+@pytest.mark.asyncio
+async def test_received_owner_returns_403(
+    client: AsyncClient,
+    owner_token: str,
+) -> None:
+    """El historial de ENTRADA es pantalla de cocinero/admin — owner 403."""
+    response = await client.get(
+        "/api/v1/purchase-orders/received",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert response.status_code == 403
