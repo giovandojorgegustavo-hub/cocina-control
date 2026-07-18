@@ -83,7 +83,7 @@ export function Home() {
       <main className="flex-1 flex flex-col md:flex-row gap-px bg-gray-300 overflow-hidden">
         <ActionButton title="ENTRADA" subtitle="(llegó una entrega)" to="/entradas" />
         <ActionButton title="INVENTARIO" subtitle="(contar stock)" to="/inventario" />
-        <ActionButton title="PEDIDO" subtitle="(foto al empacar)" to="/pedidos/nuevo" />
+        <ActionButton title="PEDIDO" subtitle="(bandeja y foto)" to="/pedidos" />
         {canCreateOrders && (
           <ActionButton title="NUEVA ORDEN" subtitle="(cargar compra)" to="/ordenes/nueva" />
         )}

@@ -38,7 +38,7 @@ function NoCameraView({ reason }: { reason: 'unavailable' | 'denied' }) {
     <div className="h-screen flex flex-col bg-gray-900 text-white">
       <header className="px-4 py-4 flex items-center gap-3 flex-shrink-0">
         <button
-          onClick={() => navigate('/')}
+          onClick={() => navigate('/pedidos')}
           className="min-h-[48px] min-w-[48px] flex items-center justify-center text-white text-xl font-bold"
           aria-label="Volver al home"
         >
@@ -114,7 +114,7 @@ function ConfirmedView({ time }: { time: string }) {
         <p className="text-gray-300 text-base">completalo cuando puedas</p>
       </div>
 
-      <p className="text-gray-500 text-sm mt-4">volviendo al inicio...</p>
+      <p className="text-gray-500 text-sm mt-4">volviendo a la bandeja...</p>
     </div>
   )
 }
@@ -161,7 +161,7 @@ function CameraView({
     <div className="h-screen flex flex-col bg-gray-900">
       <header className="px-4 py-4 flex items-center gap-3 flex-shrink-0">
         <button
-          onClick={() => navigate('/')}
+          onClick={() => navigate('/pedidos')}
           className="min-h-[48px] min-w-[48px] flex items-center justify-center text-white text-xl font-bold"
           aria-label="Volver al home"
         >
@@ -288,7 +288,7 @@ export function NuevoPedido() {
   useEffect(() => {
     if (screen !== 'confirmed') return
     const t = setTimeout(() => {
-      navigate('/', { replace: true })
+      navigate('/pedidos', { replace: true })
     }, 1500)
     return () => clearTimeout(t)
   }, [screen, navigate])

@@ -303,6 +303,20 @@ export function BandejaPedidos() {
         )}
       </main>
 
+      {/* + grande: foto nueva (issue #139 — bandeja-first). El owner ve la
+          bandeja en solo-lectura, no saca fotos. */}
+      {!isOwner && (
+        <footer className="flex-shrink-0 bg-gray-50 border-t border-gray-200 p-3">
+          <button
+            onClick={() => navigate('/pedidos/nuevo')}
+            className="w-full min-h-[72px] bg-gray-900 text-white text-2xl font-black tracking-widest uppercase active:opacity-80"
+            aria-label="Sacar foto de pedido nuevo"
+          >
+            + FOTO
+          </button>
+        </footer>
+      )}
+
       {isError && showError && (
         <ErrorBanner
           message="Error al cargar pedidos."

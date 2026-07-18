@@ -160,7 +160,7 @@ test('test_shutter_returns_home_after_confirmation', async ({ page }) => {
   await expect(page.getByTestId('confirmed-view')).toBeVisible()
 
   // After 1.5 s + grace, must be back at home
-  await expect(page).toHaveURL('/', { timeout: 4000 })
+  await expect(page).toHaveURL('/pedidos', { timeout: 4000 })
 })
 
 // ---------------------------------------------------------------------------

@@ -128,7 +128,7 @@ test('test_home_button_subtitles_have_parentheses', async ({ page }) => {
 
   await expect(page.getByRole('button', { name: /ENTRADA/i })).toContainText('(llegó una entrega)')
   await expect(page.getByRole('button', { name: /INVENTARIO/i })).toContainText('(contar stock)')
-  await expect(page.getByRole('button', { name: /^PEDIDO/ })).toContainText('(foto al empacar)')
+  await expect(page.getByRole('button', { name: /^PEDIDO/ })).toContainText('(bandeja y foto)')
 })
 
 // ---------------------------------------------------------------------------
@@ -160,14 +160,17 @@ test('test_inventario_button_navigates_to_inventario', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// test_pedido_button_navigates_to_pedidos_nuevo (CS-3)
+// test_pedido_button_navigates_to_bandeja (issue #139: bandeja-first)
 // ---------------------------------------------------------------------------
 
-test('test_pedido_button_navigates_to_pedidos_nuevo', async ({ page }) => {
+test('test_pedido_button_navigates_to_bandeja', async ({ page }) => {
   await injectToken(page, 'operator')
+  await page.route('**/api/v1/delivery-orders*', (route) => {
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
+  })
   await page.goto('/')
   await page.getByRole('button', { name: /^PEDIDO/ }).click()
-  await expect(page).toHaveURL(/\/pedidos\/nuevo/)
+  await expect(page).toHaveURL('/pedidos')
 })
 
 // ---------------------------------------------------------------------------
