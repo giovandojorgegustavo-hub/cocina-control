@@ -242,6 +242,15 @@ export interface PurchaseOrderCreate {
 }
 
 /** EP-4 GET /purchase-orders/pending — cocinero/admin, zero monetary fields */
+// Historial de partidas recibidas (issue #146) — sin campos monetarios
+export interface PurchaseOrderReceivedPartida {
+  id: string
+  supplier_name: string
+  validated_at: string
+  validated_by_name: string | null
+  received_summary: string
+}
+
 export interface PurchaseOrderPendingItem {
   id: string
   supplier_name: string

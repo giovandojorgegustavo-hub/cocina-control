@@ -132,6 +132,22 @@ class PurchaseOrderListItem(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class PurchaseOrderReceivedPartida(BaseModel):
+    """Response schema for GET /purchase-orders/received (issue #146).
+
+    Historial de partidas recibidas para la bandeja de ENTRADA.
+    CRITICAL: sin campos monetarios (regla de oro — pantalla de cocinero).
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    supplier_name: str
+    validated_at: datetime
+    validated_by_name: str | None
+    received_summary: str
+
+
 class PurchaseOrderPendingItem(BaseModel):
     """Response schema for EP-4 GET /purchase-orders/pending.
 

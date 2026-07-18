@@ -42,6 +42,7 @@ from cocina_control.models.purchase_order import (
 )
 from cocina_control.models.user import User
 from cocina_control.schemas.purchase_order import (
+    PurchaseOrderReceivedPartida,
     PartidaCreate,
     PartidaDraftItem,
     PartidaDraftResponse,
@@ -53,6 +54,7 @@ from cocina_control.schemas.purchase_order import (
     PurchaseOrderPendingItem,
 )
 from cocina_control.services.purchase_orders import (
+    build_received_summary,
     build_pending_summary,
     compute_order_totals,
     derive_status,
@@ -318,6 +320,60 @@ def list_pending_orders(
         )
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# GET /purchase-orders/received — historial de partidas (issue #146)
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/received",
+    response_model=list[PurchaseOrderReceivedPartida],
+    summary="Cocinero bandeja: historial de partidas recibidas (cocinero or admin)",
+)
+def list_received_partidas(
+    limit: int = Query(default=30, ge=1, le=100),
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_any_role("cocinero", "admin")),
+) -> list[PurchaseOrderReceivedPartida]:
+    """Partidas validadas de ordenes de compra, mas recientes primero.
+
+    CRITICAL: sin campos monetarios (regla de oro — pantalla de cocinero).
+    """
+    from cocina_control.models.delivery import Delivery
+
+    deliveries = session.scalars(
+        select(Delivery)
+        .where(
+            Delivery.purchase_order_id.is_not(None),
+            Delivery.status == "validada",
+        )
+        .order_by(Delivery.validated_at.desc())
+        .limit(limit)
+    ).all()
+
+    validator_ids = list({d.validated_by for d in deliveries if d.validated_by})
+    validators: dict = {}
+    if validator_ids:
+        validators = {
+            u.id: u.name
+            for u in session.scalars(
+                select(User).where(User.id.in_(validator_ids))
+            ).all()
+        }
+
+    return [
+        PurchaseOrderReceivedPartida(
+            id=d.id,
+            supplier_name=d.supplier_name,
+            validated_at=d.validated_at,
+            validated_by_name=validators.get(d.validated_by),
+            received_summary=build_received_summary(session, d.id),
+        )
+        for d in deliveries
+        if d.validated_at is not None
+    ]
 
 
 # ---------------------------------------------------------------------------

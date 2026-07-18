@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from './api'
 import type {
+  PurchaseOrderReceivedPartida,
   PurchaseOrderListItem,
   PurchaseOrderDetailResponse,
   PurchaseOrderCreate,
@@ -77,6 +78,26 @@ export function usePendingPurchaseOrders(userId?: string | null) {
   return useQuery({
     queryKey: ['purchase-orders-pending', userId ?? null],
     queryFn: fetchPendingPurchaseOrders,
+    staleTime: 0,
+    networkMode: 'offlineFirst',
+  })
+}
+
+// ---------------------------------------------------------------------------
+// GET /purchase-orders/received — historial de partidas (issue #146)
+// ---------------------------------------------------------------------------
+
+async function fetchReceivedPartidas(): Promise<PurchaseOrderReceivedPartida[]> {
+  const response = await apiClient.get<PurchaseOrderReceivedPartida[]>(
+    '/purchase-orders/received',
+  )
+  return response.data
+}
+
+export function useReceivedPartidas(userId?: string | null) {
+  return useQuery({
+    queryKey: ['purchase-orders-received', userId ?? null],
+    queryFn: fetchReceivedPartidas,
     staleTime: 0,
     networkMode: 'offlineFirst',
   })

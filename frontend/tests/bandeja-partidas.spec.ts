@@ -214,3 +214,39 @@ test('test_401_response_clears_token_and_redirects_to_login', async ({ page }) =
   const parsed = JSON.parse(stored ?? '{}') as { state?: { token?: string | null } }
   expect(parsed?.state?.token ?? null).toBeNull()
 })
+
+// ---------------------------------------------------------------------------
+// test_seccion_recibidos_muestra_historial (issue #146)
+// La bandeja de ENTRADA muestra el registro de partidas recibidas debajo
+// de las pendientes — sin montos (regla de oro).
+// ---------------------------------------------------------------------------
+
+test('test_seccion_recibidos_muestra_historial', async ({ page }) => {
+  await injectCociToken(page)
+
+  await page.route('**/api/v1/purchase-orders/pending', (route) => {
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
+  })
+  await page.route('**/api/v1/purchase-orders/received*', (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([
+        {
+          id: 'partida-1',
+          supplier_name: 'CARNICERIA LOPEZ',
+          validated_at: new Date().toISOString(),
+          validated_by_name: 'Dario',
+          received_summary: '18 kg CERDO · 40 kg POLLO',
+        },
+      ]),
+    })
+  })
+
+  await page.goto('/entradas')
+
+  await expect(page.getByText('recibidos', { exact: true })).toBeVisible()
+  await expect(page.getByText('CARNICERIA LOPEZ')).toBeVisible()
+  await expect(page.getByText('18 kg CERDO · 40 kg POLLO')).toBeVisible()
+  await expect(page.getByText(/recibio Dario/)).toBeVisible()
+})
