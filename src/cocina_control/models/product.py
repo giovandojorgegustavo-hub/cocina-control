@@ -27,6 +27,12 @@ class Product(Base, TimestampMixin):
             "low_stock_threshold IS NULL OR low_stock_threshold > 0",
             name="ck_products_low_stock_threshold_positive",
         ),
+        # Un producto es de compra (insumo), de venta (item de pedido) o ambos —
+        # pero nunca ninguno. Mirrors migration 0015.
+        sa.CheckConstraint(
+            "is_purchase OR is_sale",
+            name="ck_products_purchase_or_sale",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -40,6 +46,10 @@ class Product(Base, TimestampMixin):
         sa.Numeric, nullable=True
     )
     is_active: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
+    # Flags independientes (issue #140): compra = insumo que entra por ordenes;
+    # venta = item que sale en pedidos. Pueden ser ambos.
+    is_purchase: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
+    is_sale: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
     created_by: Mapped[uuid.UUID] = mapped_column(
         sa.ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )

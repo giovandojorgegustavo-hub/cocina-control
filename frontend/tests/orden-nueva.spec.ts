@@ -2,13 +2,13 @@ import { test, expect } from '@playwright/test'
 import { makeTestJwt } from './helpers/testJwt'
 
 const ORDERS_URL = '**/api/v1/purchase-orders'
-const PRODUCTS_URL = '**/api/v1/products'
+const PRODUCTS_URL = '**/api/v1/products*'
 const SUPPLIERS_URL = '**/api/v1/suppliers'
 
 const MOCK_PRODUCTS = [
-  { id: 'prod-palta', name: 'PALTA', unit: 'un', low_stock_threshold: null },
-  { id: 'prod-tomate', name: 'TOMATE', unit: 'kg', low_stock_threshold: null },
-  { id: 'prod-cebolla', name: 'CEBOLLA', unit: 'kg', low_stock_threshold: null },
+  { id: 'prod-palta', name: 'PALTA', unit: 'un', low_stock_threshold: null, is_purchase: true, is_sale: false },
+  { id: 'prod-tomate', name: 'TOMATE', unit: 'kg', low_stock_threshold: null, is_purchase: true, is_sale: false },
+  { id: 'prod-cebolla', name: 'CEBOLLA', unit: 'kg', low_stock_threshold: null, is_purchase: true, is_sale: false },
 ]
 
 const MOCK_SUPPLIERS = [
@@ -302,11 +302,11 @@ test('test_add_remove_add_does_not_collide_localids', async ({ page }) => {
   await setupMocks(page)
 
   const MOCK_PRODUCTS_WITH_POLLO = [
-    { id: 'prod-palta', name: 'PALTA', unit: 'un', low_stock_threshold: null },
-    { id: 'prod-pollo', name: 'POLLO', unit: 'kg', low_stock_threshold: null },
+    { id: 'prod-palta', name: 'PALTA', unit: 'un', low_stock_threshold: null, is_purchase: true, is_sale: false },
+    { id: 'prod-pollo', name: 'POLLO', unit: 'kg', low_stock_threshold: null, is_purchase: true, is_sale: false },
   ]
 
-  await page.route('**/api/v1/products', (route) => {
+  await page.route('**/api/v1/products*', (route) => {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -827,9 +827,16 @@ test('test_crear_producto_inline_happy_path', async ({ page }) => {
 
   // POST /products was called with the typed name + chosen unit
   expect(productPostBodies).toHaveLength(1)
-  const productBody = JSON.parse(productPostBodies[0]) as { name: string; unit: string }
+  const productBody = JSON.parse(productPostBodies[0]) as {
+    name: string
+    unit: string
+    is_purchase: boolean
+    is_sale: boolean
+  }
   expect(productBody.name).toBe('papas fritas')
   expect(productBody.unit).toBe('kg')
+  expect(productBody.is_purchase).toBe(true)
+  expect(productBody.is_sale).toBe(false)
 
   // The order references the freshly created product id
   expect(orderPostBodies).toHaveLength(1)

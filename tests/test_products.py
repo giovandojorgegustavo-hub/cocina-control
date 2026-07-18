@@ -141,6 +141,115 @@ async def test_create_product_admin_success(
 
 
 @pytest.mark.asyncio
+async def test_create_product_default_flags_purchase_only(
+    client: AsyncClient,
+    owner_token: str,
+) -> None:
+    """Sin flags explicitos, el producto nace como compra (no venta) — issue #140."""
+    response = await client.post(
+        "/api/v1/products",
+        json={"name": "arroz", "unit": "kg"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["is_purchase"] is True
+    assert data["is_sale"] is False
+
+
+@pytest.mark.asyncio
+async def test_create_product_sale_and_both_flags(
+    client: AsyncClient,
+    owner_token: str,
+) -> None:
+    """Se puede crear un producto solo-venta y uno de ambos flujos — issue #140."""
+    r_sale = await client.post(
+        "/api/v1/products",
+        json={"name": "bowl clasico", "unit": "un", "is_purchase": False, "is_sale": True},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert r_sale.status_code == 201
+    assert r_sale.json()["is_sale"] is True
+    assert r_sale.json()["is_purchase"] is False
+
+    r_both = await client.post(
+        "/api/v1/products",
+        json={"name": "gaseosa lata", "unit": "un", "is_purchase": True, "is_sale": True},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert r_both.status_code == 201
+    assert r_both.json()["is_purchase"] is True
+    assert r_both.json()["is_sale"] is True
+
+
+@pytest.mark.asyncio
+async def test_create_product_neither_flag_rejected(
+    client: AsyncClient,
+    owner_token: str,
+) -> None:
+    """Un producto que no es de compra NI de venta se rechaza con 422 — issue #140."""
+    response = await client.post(
+        "/api/v1/products",
+        json={"name": "fantasma", "unit": "un", "is_purchase": False, "is_sale": False},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_list_products_flow_filter(
+    client: AsyncClient,
+    owner_token: str,
+) -> None:
+    """?flow=purchase y ?flow=sale filtran el catalogo por flujo — issue #140."""
+    headers = {"Authorization": f"Bearer {owner_token}"}
+    await client.post(
+        "/api/v1/products",
+        json={"name": "papa insumo", "unit": "kg"},
+        headers=headers,
+    )
+    await client.post(
+        "/api/v1/products",
+        json={"name": "bowl venta", "unit": "un", "is_purchase": False, "is_sale": True},
+        headers=headers,
+    )
+
+    r_purchase = await client.get("/api/v1/products?flow=purchase", headers=headers)
+    assert r_purchase.status_code == 200
+    purchase_names = [p["name"] for p in r_purchase.json()]
+    assert "PAPA INSUMO" in purchase_names
+    assert "BOWL VENTA" not in purchase_names
+
+    r_sale = await client.get("/api/v1/products?flow=sale", headers=headers)
+    assert r_sale.status_code == 200
+    sale_names = [p["name"] for p in r_sale.json()]
+    assert "BOWL VENTA" in sale_names
+    assert "PAPA INSUMO" not in sale_names
+
+
+@pytest.mark.asyncio
+async def test_update_product_cannot_clear_both_flags(
+    client: AsyncClient,
+    owner_token: str,
+) -> None:
+    """PATCH que dejaria el producto sin ningun flujo se rechaza con 422 — issue #140."""
+    headers = {"Authorization": f"Bearer {owner_token}"}
+    created = await client.post(
+        "/api/v1/products",
+        json={"name": "quinua", "unit": "kg"},
+        headers=headers,
+    )
+    product_id = created.json()["id"]
+
+    response = await client.patch(
+        f"/api/v1/products/{product_id}",
+        json={"is_purchase": False},
+        headers=headers,
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_create_product_operator_returns_403(
     client: AsyncClient,
     cocinero_token: str,

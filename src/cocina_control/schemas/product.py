@@ -44,11 +44,21 @@ class ProductCreate(BaseModel):
         Decimal | None,
         Field(default=None, gt=0),
     ] = None
+    # Flags independientes (issue #140): un producto puede ser de compra,
+    # de venta, o ambos — nunca ninguno.
+    is_purchase: bool = True
+    is_sale: bool = False
 
     @field_validator("name", mode="before")
     @classmethod
     def normalise_name(cls, v: str) -> str:
         return _validate_name(v)
+
+    @model_validator(mode="after")
+    def purchase_or_sale(self) -> "ProductCreate":
+        if not (self.is_purchase or self.is_sale):
+            raise ValueError("product must be purchase, sale, or both — not neither")
+        return self
 
 
 class ProductUpdate(BaseModel):
@@ -60,6 +70,8 @@ class ProductUpdate(BaseModel):
         Decimal | None,
         Field(default=None, gt=0),
     ] = None
+    is_purchase: bool | None = None
+    is_sale: bool | None = None
 
     @field_validator("name", mode="before")
     @classmethod
@@ -70,7 +82,13 @@ class ProductUpdate(BaseModel):
 
     @model_validator(mode="after")
     def at_least_one_field(self) -> "ProductUpdate":
-        if self.name is None and self.unit is None and self.low_stock_threshold is None:
+        if (
+            self.name is None
+            and self.unit is None
+            and self.low_stock_threshold is None
+            and self.is_purchase is None
+            and self.is_sale is None
+        ):
             raise ValueError("at least one field must be provided")
         return self
 
@@ -89,6 +107,8 @@ class ProductListItem(BaseModel):
     name: str
     unit: str
     low_stock_threshold: Decimal | None
+    is_purchase: bool
+    is_sale: bool
 
 
 class ProductResponse(BaseModel):
@@ -101,3 +121,5 @@ class ProductResponse(BaseModel):
     unit: str
     low_stock_threshold: Decimal | None
     is_active: bool
+    is_purchase: bool
+    is_sale: bool

@@ -17,8 +17,9 @@ Invariants
 
 import uuid
 from datetime import UTC, datetime
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -93,15 +94,28 @@ def _utcnow() -> datetime:
     summary="List active products",
 )
 def list_products(
+    flow: Literal["purchase", "sale"] | None = Query(
+        default=None,
+        description="Filter by flow: 'purchase' (ordenes de compra) or 'sale' (pedidos).",
+    ),
     session: Session = Depends(get_session),
     _current_user: User = Depends(get_current_user),
 ) -> list[Product]:
-    """Return all active products ordered alphabetically by name."""
+    """Return all active products ordered alphabetically by name.
+
+    With ?flow=purchase only purchase products (insumos) are returned;
+    with ?flow=sale only sale products (items de pedido). Without the
+    param, the full active catalogue.
+    """
     stmt = (
         select(Product)
         .where(Product.is_active.is_(True))
         .order_by(Product.name)
     )
+    if flow == "purchase":
+        stmt = stmt.where(Product.is_purchase.is_(True))
+    elif flow == "sale":
+        stmt = stmt.where(Product.is_sale.is_(True))
     return list(session.scalars(stmt).all())
 
 
@@ -134,6 +148,8 @@ def create_product(
         unit=body.unit.value,
         low_stock_threshold=body.low_stock_threshold,
         is_active=True,
+        is_purchase=body.is_purchase,
+        is_sale=body.is_sale,
         created_by=current_user.id,
     )
     session.add(product)
@@ -190,6 +206,16 @@ def update_product(
 
     if body.low_stock_threshold is not None:
         product.low_stock_threshold = body.low_stock_threshold
+
+    if body.is_purchase is not None:
+        product.is_purchase = body.is_purchase
+    if body.is_sale is not None:
+        product.is_sale = body.is_sale
+    if not (product.is_purchase or product.is_sale):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="product must be purchase, sale, or both — not neither",
+        )
 
     product.updated_by = current_user.id
     product.updated_at = _utcnow()
