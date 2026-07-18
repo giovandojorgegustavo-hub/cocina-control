@@ -262,3 +262,46 @@ test('test_bandeja_no_auth_redirects_to_login', async ({ page }) => {
   await page.goto('/pedidos')
   await expect(page).toHaveURL(/\/login/)
 })
+
+// ---------------------------------------------------------------------------
+// test_boton_foto_grande_navega_a_camara (issue #139: bandeja-first)
+// The bandeja has a big + FOTO button that opens the camera flow.
+// ---------------------------------------------------------------------------
+
+test('test_boton_foto_grande_navega_a_camara', async ({ page }) => {
+  await injectOperatorToken(page)
+  await page.route(ORDERS_URL, (route) => {
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
+  })
+
+  await page.goto('/pedidos')
+
+  const fotoBtn = page.getByRole('button', { name: /sacar foto de pedido nuevo/i })
+  await expect(fotoBtn).toBeVisible()
+  await fotoBtn.click()
+
+  await expect(page).toHaveURL(/\/pedidos\/nuevo/)
+})
+
+// ---------------------------------------------------------------------------
+// test_owner_no_ve_boton_foto (issue #139)
+// The owner sees the bandeja read-only: no + FOTO button.
+// ---------------------------------------------------------------------------
+
+test('test_owner_no_ve_boton_foto', async ({ page }) => {
+  const token = makeTestJwt('owner')
+  await page.goto('/login')
+  await page.evaluate((t) => {
+    sessionStorage.setItem('cocina-auth', JSON.stringify({ state: { token: t }, version: 0 }))
+  }, token)
+  await page.route(ORDERS_URL, (route) => {
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
+  })
+
+  await page.goto('/pedidos')
+
+  await expect(page.getByText(/todavia no hay pedidos/i)).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: /sacar foto de pedido nuevo/i }),
+  ).toHaveCount(0)
+})

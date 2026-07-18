@@ -4,7 +4,7 @@
 import { test, expect } from '@playwright/test'
 import { makeTestJwt } from './helpers/testJwt'
 
-const PRODUCTS_URL = '**/api/v1/products'
+const PRODUCTS_URL = '**/api/v1/products*'
 const ORDER_URL = '**/api/v1/delivery-orders/*'
 const COMPLETE_URL = '**/api/v1/delivery-orders/*/complete'
 const PHOTO_URL = '**/api/v1/delivery-orders/*/photo'
@@ -23,9 +23,9 @@ const MOCK_ORDER = {
 }
 
 const MOCK_PRODUCTS = [
-  { id: 'prod-1', name: 'PALTA', unit: 'kg', low_stock_threshold: null },
-  { id: 'prod-2', name: 'POLLO', unit: 'kg', low_stock_threshold: null },
-  { id: 'prod-3', name: 'TOMATE', unit: 'kg', low_stock_threshold: null },
+  { id: 'prod-1', name: 'PALTA', unit: 'kg', low_stock_threshold: null, is_purchase: false, is_sale: true },
+  { id: 'prod-2', name: 'POLLO', unit: 'kg', low_stock_threshold: null, is_purchase: false, is_sale: true },
+  { id: 'prod-3', name: 'TOMATE', unit: 'kg', low_stock_threshold: null, is_purchase: true, is_sale: true },
 ]
 
 async function injectOperatorToken(page: import('@playwright/test').Page) {

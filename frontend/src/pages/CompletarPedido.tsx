@@ -14,7 +14,8 @@
 import { useState, useCallback, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useOrder, useCompleteOrder } from '../lib/orders'
-import { useProducts } from '../lib/products'
+import { useProducts, useCreateProduct } from '../lib/products'
+import { useAuthWithGetters } from '../lib/auth'
 import { AuthImg } from '../components/AuthImg'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { formatRelativeDate } from '../lib/date'
@@ -31,6 +32,106 @@ const BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.BASE_URL.replac
 interface ProductSelection {
   product: Product
   quantity: number
+}
+
+// ---------------------------------------------------------------------------
+// Alta inline de producto de venta (issues #139/#140): bowls, cubiertos,
+// cremas... se crean desde el propio pedido. Solo owner/admin (el backend
+// exige ese rol); el producto nace como venta pura (is_sale, sin compra).
+// ---------------------------------------------------------------------------
+
+function NuevaVentaCard({
+  createProduct,
+  onCreated,
+}: {
+  createProduct: ReturnType<typeof useCreateProduct>
+  onCreated: (p: Product) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [name, setName] = useState('')
+  const [unit, setUnit] = useState('un')
+  const [failed, setFailed] = useState(false)
+
+  async function handleCrear() {
+    if (!name.trim() || createProduct.isPending) return
+    setFailed(false)
+    try {
+      const created = await createProduct.mutateAsync({
+        name: name.trim(),
+        unit,
+        is_purchase: false,
+        is_sale: true,
+      })
+      onCreated(created)
+      setName('')
+      setOpen(false)
+    } catch {
+      setFailed(true)
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="min-h-[96px] border-2 border-dashed border-gray-400 text-gray-600 flex flex-col items-center justify-center gap-1 active:bg-gray-100"
+        aria-label="Crear producto de venta"
+      >
+        <span className="text-2xl font-black leading-none">+</span>
+        <span className="text-sm font-semibold">nuevo</span>
+      </button>
+    )
+  }
+
+  return (
+    <div className="col-span-3 border-2 border-gray-900 bg-gray-50 p-3 flex flex-col gap-2">
+      <input
+        type="text"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="nombre del producto de venta"
+        aria-label="Nombre del producto de venta"
+        autoFocus
+        className="min-h-[44px] px-2 border border-gray-300 text-sm w-full focus:outline-none focus:ring-2 focus:ring-gray-900"
+      />
+      <div className="flex gap-2">
+        <select
+          value={unit}
+          onChange={(e) => setUnit(e.target.value)}
+          aria-label="Unidad del producto de venta"
+          className="min-h-[44px] px-2 border-2 border-gray-900 bg-white text-sm"
+        >
+          <option value="un">un</option>
+          <option value="kg">kg</option>
+          <option value="lt">lt</option>
+        </select>
+        <button
+          type="button"
+          onClick={handleCrear}
+          disabled={!name.trim() || createProduct.isPending}
+          className={[
+            'flex-1 min-h-[44px] text-sm font-bold uppercase',
+            name.trim() && !createProduct.isPending
+              ? 'bg-gray-900 text-white active:opacity-80'
+              : 'bg-gray-200 text-gray-400',
+          ].join(' ')}
+        >
+          {createProduct.isPending ? 'creando...' : 'crear'}
+        </button>
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          className="min-h-[44px] px-3 text-sm text-gray-600 border border-gray-300"
+        >
+          cancelar
+        </button>
+      </div>
+      {failed && (
+        <p className="text-xs text-red-600">no se pudo crear — proba de nuevo</p>
+      )}
+    </div>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -174,9 +275,13 @@ export function CompletarPedido() {
     data: products,
     isLoading: productsLoading,
     isError: productsError,
-  } = useProducts()
+  } = useProducts('sale')
 
   const completeOrder = useCompleteOrder(id ?? '')
+  const createProduct = useCreateProduct()
+  const { role } = useAuthWithGetters()
+  // el backend exige owner/admin para crear productos; el cocinero no ve el +
+  const canCreateSale = role === 'owner' || role === 'admin'
 
   const [selections, setSelections] = useState<Map<string, ProductSelection>>(new Map())
   const [screen, setScreen] = useState<'form' | 'confirmed'>('form')
@@ -300,7 +405,7 @@ export function CompletarPedido() {
 
           {isLoading && <ProductSkeleton />}
 
-          {!isLoading && products && products.length > 0 && (
+          {!isLoading && products && (products.length > 0 || canCreateSale) && (
             <div className="grid grid-cols-3 gap-2 px-4 pb-4">
               {products.map((product) => {
                 const sel = selections.get(product.id)
@@ -314,10 +419,13 @@ export function CompletarPedido() {
                   />
                 )
               })}
+              {canCreateSale && (
+                <NuevaVentaCard createProduct={createProduct} onCreated={handleTap} />
+              )}
             </div>
           )}
 
-          {!isLoading && products && products.length === 0 && (
+          {!isLoading && products && products.length === 0 && !canCreateSale && (
             <div className="px-4 py-8 text-center">
               <p className="text-gray-500 text-sm">
                 No hay productos en el catalogo. Pedile al dueno que los cargue.
