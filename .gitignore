@@ -22,3 +22,6 @@ build/
 # Testing / linting
 .pytest_cache/
 .ruff_cache/
+
+# config productiva de deploy — jamas se commitea (issue #13 de fabrica)
+scripts/deploy.env
