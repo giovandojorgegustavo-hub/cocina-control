@@ -216,6 +216,16 @@ jobs:
       # -------------------------------------------------------------------
       # 3b. Rsync the tagged source tree (backend + migrations + docs).
       #     Exclude everything the server generates or manages locally.
+      #
+      #     __pycache__ is excluded on purpose (issue #123). It is generated
+      #     ON the server, by whoever last imported the module — and a CLI
+      #     script run as root leaves root-owned .pyc inside a deploy path
+      #     owned by the deploy user. rsync --delete then tries to unlink
+      #     them, gets EACCES and aborts the whole release with code 23.
+      #     Excluded paths are not deleted on the receiver (that would need
+      #     --delete-excluded), so the stale caches simply stay put and
+      #     Python overwrites them as needed. Never add --delete-excluded
+      #     here: it would reintroduce exactly this failure.
       # -------------------------------------------------------------------
       - name: Rsync backend source
         env:
@@ -225,6 +235,8 @@ jobs:
         run: |
           rsync -avz --delete \
             --exclude '.git/' \
+            --exclude '__pycache__/' \
+            --exclude '*.pyc' \
             --exclude 'node_modules/' \
             --exclude '.venv/' \
             --exclude 'frontend/dist/' \
