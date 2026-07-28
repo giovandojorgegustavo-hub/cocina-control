@@ -83,8 +83,14 @@ def postgres_url(request) -> str:  # type: ignore[return]
     Priority:
     1. pytest-postgresql ephemeral process  (preferred — zero config)
     2. TEST_DATABASE_URL env var
-    3. COCINA_DATABASE_URL env var
-    4. pytest.skip
+    3. pytest.skip
+
+    COCINA_DATABASE_URL is deliberately NOT in that chain. ``db_engine`` runs
+    ``alembic downgrade base`` on teardown, so falling back to the app's own URL
+    meant that running pytest on a box where pytest-postgresql fails to import —
+    the server, where docs/despliegue.md tells you to ``source /etc/cocina-control/env``
+    — would drop the production schema. CI sets TEST_DATABASE_URL explicitly
+    (.github/workflows/gates.yml), so nothing legitimate relied on the fallback.
     """
     if _PYTEST_PG_AVAILABLE:
         import psycopg
@@ -109,10 +115,9 @@ def postgres_url(request) -> str:  # type: ignore[return]
             f"/{_TEST_DBNAME}"
         )
 
-    for var in ("TEST_DATABASE_URL", "COCINA_DATABASE_URL"):
-        env_url = os.environ.get(var)
-        if env_url:
-            return env_url
+    env_url = os.environ.get("TEST_DATABASE_URL")
+    if env_url:
+        return env_url
 
     pytest.skip(
         "No PostgreSQL available: install pytest-postgresql or set TEST_DATABASE_URL"
