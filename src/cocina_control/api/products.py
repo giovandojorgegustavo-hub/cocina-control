@@ -107,11 +107,7 @@ def list_products(
     with ?flow=sale only sale products (items de pedido). Without the
     param, the full active catalogue.
     """
-    stmt = (
-        select(Product)
-        .where(Product.is_active.is_(True))
-        .order_by(Product.name)
-    )
+    stmt = select(Product).where(Product.is_active.is_(True)).order_by(Product.name)
     if flow == "purchase":
         stmt = stmt.where(Product.is_purchase.is_(True))
     elif flow == "sale":
@@ -150,6 +146,7 @@ def create_product(
         is_active=True,
         is_purchase=body.is_purchase,
         is_sale=body.is_sale,
+        is_manufactured=body.is_manufactured,
         created_by=current_user.id,
     )
     session.add(product)
@@ -211,10 +208,13 @@ def update_product(
         product.is_purchase = body.is_purchase
     if body.is_sale is not None:
         product.is_sale = body.is_sale
-    if not (product.is_purchase or product.is_sale):
+    if body.is_manufactured is not None:
+        product.is_manufactured = body.is_manufactured
+    # Mirrors ck_products_purchase_sale_or_manufactured (migration 0017).
+    if not (product.is_purchase or product.is_sale or product.is_manufactured):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="product must be purchase, sale, or both — not neither",
+            detail="product must be purchase, sale, manufactured, or a combination — not none",
         )
 
     product.updated_by = current_user.id

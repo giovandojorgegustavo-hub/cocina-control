@@ -27,11 +27,12 @@ class Product(Base, TimestampMixin):
             "low_stock_threshold IS NULL OR low_stock_threshold > 0",
             name="ck_products_low_stock_threshold_positive",
         ),
-        # Un producto es de compra (insumo), de venta (item de pedido) o ambos —
-        # pero nunca ninguno. Mirrors migration 0015.
+        # Un producto es de compra (insumo), de venta (item de pedido), fabricado
+        # (preparado) o cualquier combinacion — pero nunca ninguno.
+        # Mirrors migration 0017.
         sa.CheckConstraint(
-            "is_purchase OR is_sale",
-            name="ck_products_purchase_or_sale",
+            "is_purchase OR is_sale OR is_manufactured",
+            name="ck_products_purchase_sale_or_manufactured",
         ),
     )
 
@@ -42,22 +43,22 @@ class Product(Base, TimestampMixin):
     )
     name: Mapped[str] = mapped_column(sa.Text, nullable=False)
     unit: Mapped[str] = mapped_column(_UNIT_ENUM, nullable=False)
-    low_stock_threshold: Mapped[Decimal | None] = mapped_column(
-        sa.Numeric, nullable=True
-    )
+    low_stock_threshold: Mapped[Decimal | None] = mapped_column(sa.Numeric, nullable=True)
     is_active: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
     # Flags independientes (issue #140): compra = insumo que entra por ordenes;
     # venta = item que sale en pedidos. Pueden ser ambos.
     is_purchase: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
     is_sale: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
+    # Preparado que se produce en cocina (migration 0017). Un preparado puede no
+    # comprarse ni venderse — la quinua cocida no es ninguna de las dos y aun asi
+    # existe y se cuenta.
+    is_manufactured: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
     created_by: Mapped[uuid.UUID] = mapped_column(
         sa.ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
     # Audit columns: set on every PATCH and soft-DELETE.
     # nullable because products created before this migration have no mutation history.
-    updated_at: Mapped[datetime | None] = mapped_column(
-        sa.DateTime(timezone=True), nullable=True
-    )
+    updated_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(
         sa.ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
     )

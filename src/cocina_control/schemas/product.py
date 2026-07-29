@@ -44,10 +44,12 @@ class ProductCreate(BaseModel):
         Decimal | None,
         Field(default=None, gt=0),
     ] = None
-    # Flags independientes (issue #140): un producto puede ser de compra,
-    # de venta, o ambos — nunca ninguno.
+    # Flags independientes (issue #140 + migration 0017): un producto puede ser
+    # de compra, de venta, fabricado, o cualquier combinacion — nunca ninguno.
+    # La quinua cocida no se compra ni se vende: solo se fabrica.
     is_purchase: bool = True
     is_sale: bool = False
+    is_manufactured: bool = False
 
     @field_validator("name", mode="before")
     @classmethod
@@ -55,9 +57,11 @@ class ProductCreate(BaseModel):
         return _validate_name(v)
 
     @model_validator(mode="after")
-    def purchase_or_sale(self) -> "ProductCreate":
-        if not (self.is_purchase or self.is_sale):
-            raise ValueError("product must be purchase, sale, or both — not neither")
+    def purchase_sale_or_manufactured(self) -> "ProductCreate":
+        if not (self.is_purchase or self.is_sale or self.is_manufactured):
+            raise ValueError(
+                "product must be purchase, sale, manufactured, or a combination — not none"
+            )
         return self
 
 
@@ -72,6 +76,7 @@ class ProductUpdate(BaseModel):
     ] = None
     is_purchase: bool | None = None
     is_sale: bool | None = None
+    is_manufactured: bool | None = None
 
     @field_validator("name", mode="before")
     @classmethod
@@ -88,6 +93,7 @@ class ProductUpdate(BaseModel):
             and self.low_stock_threshold is None
             and self.is_purchase is None
             and self.is_sale is None
+            and self.is_manufactured is None
         ):
             raise ValueError("at least one field must be provided")
         return self
@@ -109,6 +115,7 @@ class ProductListItem(BaseModel):
     low_stock_threshold: Decimal | None
     is_purchase: bool
     is_sale: bool
+    is_manufactured: bool
 
 
 class ProductResponse(BaseModel):
@@ -123,3 +130,4 @@ class ProductResponse(BaseModel):
     is_active: bool
     is_purchase: bool
     is_sale: bool
+    is_manufactured: bool
