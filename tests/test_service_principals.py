@@ -162,12 +162,12 @@ async def test_act_as_tolerates_surrounding_whitespace(client, service_token: st
 async def test_service_token_cannot_act_as_owner(client, service_token: str, owner_user):
     """The assistant captures data; it must never reach the money side."""
     response = await client.get(PRODUCTS_URL, headers=svc_headers(service_token, owner_user.email))
-    assert response.status_code == 403
+    assert response.status_code == 401
 
 
 async def test_service_token_cannot_act_as_admin(client, service_token: str, admin_user):
     response = await client.get(PRODUCTS_URL, headers=svc_headers(service_token, admin_user.email))
-    assert response.status_code == 403
+    assert response.status_code == 401
 
 
 async def test_act_as_unknown_email_is_401_not_404(client, service_token: str):
@@ -176,6 +176,30 @@ async def test_act_as_unknown_email_is_401_not_404(client, service_token: str):
         PRODUCTS_URL, headers=svc_headers(service_token, "nobody@nowhere.test")
     )
     assert response.status_code == 401
+
+
+async def test_denied_role_is_indistinguishable_from_an_unknown_email(
+    client, service_token: str, owner_user, admin_user
+):
+    """Refusing a privileged account must not confirm the account exists.
+
+    A 403 here said two things at once: that the email is real, and that it
+    belongs to an owner or admin. Holding a leaked token, that is enough to
+    enumerate exactly the accounts worth attacking — guess an address, read
+    the status code. All four responses below have to look the same.
+
+    Found by the adversarial security pass on PR #159, which caught that the
+    sibling fix in 5e0a5e7 left this branch behind.
+    """
+    responses = [
+        await client.get(PRODUCTS_URL, headers=svc_headers(service_token, owner_user.email)),
+        await client.get(PRODUCTS_URL, headers=svc_headers(service_token, admin_user.email)),
+        await client.get(PRODUCTS_URL, headers=svc_headers(service_token, "nadie@ninguna.test")),
+        await client.get(PRODUCTS_URL, headers=svc_headers(service_token)),
+    ]
+
+    assert {r.status_code for r in responses} == {401}
+    assert len({r.text for r in responses}) == 1
 
 
 async def test_user_jwt_ignores_act_as_header(client, cocinero_token: str, owner_user):

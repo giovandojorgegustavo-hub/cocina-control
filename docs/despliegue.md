@@ -364,6 +364,20 @@ Un service principal solo puede actuar como **cocinero**. Está en
 de código que pasa por revisión. Un token filtrado no llega a validar entregas
 (owner) ni a ver costos (admin).
 
+Cuando se rechaza un `X-Act-As`, la respuesta es siempre un **401 genérico** —
+nunca un 403 que diga "ese rol no está permitido". La diferencia importa: un
+403 confirmaría que el correo existe y que pertenece a un owner o admin, y con
+un token filtrado eso alcanza para enumerar justo las cuentas de más valor. El
+motivo real del rechazo queda en el log del servidor:
+
+```bash
+journalctl -u cocina-control | grep "refused act-as"
+```
+
+Si el bot empieza a recibir 401 y el token es correcto, ese log es el primer
+lugar donde mirar: casi siempre es un correo de `personas.json` que apunta a
+una cuenta que no tiene rol `cocinero`.
+
 ## Riesgos conocidos
 
 - **Rollback de código lento por clon git**: si el server no tiene `.git/` (bootstrap saltado), el rollback con `git checkout` falla. El pg_dump siempre existe; el rollback "vuelta atrás" alternativo (empujar un tag apuntando al commit previo) sigue funcionando.

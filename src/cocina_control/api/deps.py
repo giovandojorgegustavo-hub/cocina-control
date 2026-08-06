@@ -121,16 +121,20 @@ def _resolve_acting_user(
         raise credentials_error
 
     if user.role not in ACT_AS_ALLOWED_ROLES:
+        # El mismo 401 generico, no un 403 explicito.
+        #
+        # Un 403 aca decia dos cosas a la vez: que el correo existe, y que
+        # pertenece a un owner o un admin. Con un token filtrado alcanzaba para
+        # enumerar exactamente las cuentas de mas valor, probando correos y
+        # mirando si vuelve 403 o 401. La distincion util va al log; hacia
+        # afuera, todas las fallas de este camino se ven iguales.
         logger.warning(
             "Service principal %s refused act-as for %s (role=%s)",
             principal.name,
             user.email,
             user.role,
         )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Service tokens may only act as cocinero",
-        )
+        raise credentials_error
 
     # The database row will name the human.  This log line is the only place
     # that records the request arrived through a service — keep it.
