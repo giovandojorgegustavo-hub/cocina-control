@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, mapped_column
@@ -44,4 +45,12 @@ class ServicePrincipal(Base, TimestampMixin):
         nullable=False,
         server_default=sa.text("true"),
         default=True,
+    )
+    # Cuándo se revocó. Sin esta columna, el único registro del momento de la
+    # revocación son los logs del servidor — y cuando se investiga un incidente
+    # meses después, los logs ya rotaron. Saber cuándo se cortó el acceso es
+    # justo lo que hace falta para acotar la ventana de exposición.
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=True,
     )

@@ -23,6 +23,7 @@ database row, not a signed token waiting to expire.
 import argparse
 import sys
 import uuid
+from datetime import UTC, datetime
 
 
 def main() -> None:
@@ -74,7 +75,15 @@ def main() -> None:
         print("ERROR: name cannot be empty.", file=sys.stderr)
         sys.exit(1)
 
-    token = generate_service_token()
+    # Solo se genera cuando de verdad se va a emitir uno. En --revoke no se
+    # emite nada, y generarlo igual hacía leer el código como si el token
+    # sirviera en todos los caminos.
+    token = "" if args.revoke else generate_service_token()
+
+    # Se distingue de "creado": si no había ninguno activo, no se rotó nada, y
+    # decir "rotated" le haría creer al operador que revocó un token anterior
+    # que nunca existió.
+    reemplazo = False
 
     try:
         with SessionLocal() as session:
@@ -90,6 +99,7 @@ def main() -> None:
                     print(f"ERROR: no active service principal named '{name}'.", file=sys.stderr)
                     sys.exit(1)
                 existing.is_active = False
+                existing.revoked_at = datetime.now(UTC)
                 session.commit()
                 print(f"service principal revoked: {name}")
                 return
@@ -103,10 +113,12 @@ def main() -> None:
                     )
                     sys.exit(1)
                 existing.is_active = False
+                existing.revoked_at = datetime.now(UTC)
                 # Flush before inserting: the partial unique index on name
                 # covers active rows only, so the old row must be deactivated
                 # in the same transaction before the new one lands.
                 session.flush()
+                reemplazo = True
 
             principal = ServicePrincipal(
                 id=uuid.uuid4(),
@@ -131,7 +143,7 @@ def main() -> None:
         )
         sys.exit(1)
 
-    verb = "rotated" if args.rotate else "created"
+    verb = "rotated" if reemplazo else "created"
     print(f"service principal {verb}: {name}")
     print()
     print("Token (shown once — store it in the vault now):")

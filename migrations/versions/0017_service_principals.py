@@ -34,6 +34,10 @@ def upgrade() -> None:
         sa.Column("name", sa.Text(), nullable=False),
         sa.Column("token_hash", sa.Text(), nullable=False),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+        # Momento de la revocacion. Sin esto, el unico registro de cuando se
+        # corto un acceso son los logs del servidor, que rotan; investigar un
+        # incidente meses despues exige acotar esa ventana desde la base.
+        sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),

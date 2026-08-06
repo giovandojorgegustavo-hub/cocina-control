@@ -100,7 +100,28 @@ async def test_service_token_without_act_as_is_rejected(client, service_token: s
     """A service token alone names nobody — it must not authenticate."""
     response = await client.get(PRODUCTS_URL, headers=svc_headers(service_token))
     assert response.status_code == 401
-    assert "X-Act-As" in response.json()["detail"]
+
+
+async def test_valid_token_without_act_as_is_indistinguishable_from_a_bad_token(
+    client, service_token: str
+):
+    """The endpoint must not confirm that a token is live.
+
+    If the two 401s differ, anyone holding a leaked ``svc_`` token can confirm
+    it is still active by sending it with no ``X-Act-As`` and reading the
+    error — no email required, no access granted, but the credential is now
+    known to be worth using.
+
+    Worth stating plainly: the first version of this test asserted the
+    opposite (``"X-Act-As" in detail``), so the suite was pinning the leak in
+    place. Found by the adversarial QA pass on PR #159.
+    """
+    valid = await client.get(PRODUCTS_URL, headers=svc_headers(service_token))
+    bogus = await client.get(PRODUCTS_URL, headers=svc_headers(f"{SERVICE_TOKEN_PREFIX}no-existe"))
+
+    assert valid.status_code == bogus.status_code == 401
+    assert valid.json() == bogus.json()
+    assert valid.headers.get("WWW-Authenticate") == bogus.headers.get("WWW-Authenticate")
 
 
 async def test_unknown_service_token_is_rejected(client, cocinero_user):

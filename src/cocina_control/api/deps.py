@@ -90,6 +90,17 @@ def _resolve_acting_user(
     session.  That is the whole point: the audit trail must not be able to
     tell the difference.
     """
+    # act_as se valida ANTES de buscar el token, y el orden importa.
+    #
+    # Al reves, un token valido sin X-Act-As daba un 401 con mensaje distinto
+    # al de un token invalido. Esa diferencia convierte al endpoint en un
+    # oraculo: quien encuentre un token filtrado puede confirmar que sigue
+    # activo sin conocer el correo de nadie. El mensaje util se va al log del
+    # servidor, donde lo ve el operador y no quien prueba credenciales.
+    if not act_as:
+        logger.warning("Service token presented without X-Act-As header")
+        raise credentials_error
+
     principal = session.scalar(
         sa.select(ServicePrincipal).where(
             ServicePrincipal.token_hash == hash_service_token(token),
@@ -98,13 +109,6 @@ def _resolve_acting_user(
     )
     if principal is None:
         raise credentials_error
-
-    if not act_as:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Service token requires the X-Act-As header naming the acting user",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
 
     # Case-insensitive to match ix_users_email_lower, the index that enforces
     # email uniqueness.
