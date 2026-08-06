@@ -319,6 +319,51 @@ Los que NO se hashean y por eso NO se cachean:
 
 Sin este `Cache-Control: no-cache`, un release rompería la PWA porque el navegador serviría un `index.html` viejo que apunta a assets que ya no existen.
 
+## Service principals (clientes no humanos)
+
+Un service principal es una credencial para un cliente que no es una persona —
+hoy, el asistente de WhatsApp `bonabowlinterno`. No es un usuario: es un token
+que **actúa en nombre de** un cocinero real, nombrado en el header `X-Act-As`.
+
+La razón es la trazabilidad. Todas las tablas append-only tienen `created_by`
+con `ON DELETE RESTRICT`: cada fila responde por una persona. Darle usuario
+propio al asistente satisface la foreign key pero rompe el invariante — todo
+conteo diría "bonabowlinterno" y el dueño no podría saber quién se equivocó.
+
+### Acuñar el token
+
+```bash
+set -a; source /etc/cocina-control/env; set +a
+cd /opt/cocina-control
+uv run python -m cocina_control.scripts.create_service_principal --name bonabowlinterno
+```
+
+El token se imprime **una sola vez** y solo se guarda su digest SHA-256. Si se
+pierde, se rota; no se recupera. Después de acuñarlo, limpiar los secrets del
+shell como indica el paso 4 del rollback rápido — el token queda en el
+scrollback de la terminal.
+
+### Rotar y revocar
+
+```bash
+# Rotar: revoca el activo y emite uno nuevo con el mismo nombre
+uv run python -m cocina_control.scripts.create_service_principal --name bonabowlinterno --rotate
+
+# Revocar sin reemplazo (corta el acceso del bot)
+uv run python -m cocina_control.scripts.create_service_principal --name bonabowlinterno --revoke
+```
+
+Ambas tienen efecto en el request siguiente: la credencial es una fila en la
+base, no un token firmado esperando vencer. Esa es la razón de no haber usado
+un JWT de larga vida.
+
+### Límite de privilegio
+
+Un service principal solo puede actuar como **cocinero**. Está en
+`ACT_AS_ALLOWED_ROLES` (`api/deps.py`), no en la base: ampliarlo es un cambio
+de código que pasa por revisión. Un token filtrado no llega a validar entregas
+(owner) ni a ver costos (admin).
+
 ## Riesgos conocidos
 
 - **Rollback de código lento por clon git**: si el server no tiene `.git/` (bootstrap saltado), el rollback con `git checkout` falla. El pg_dump siempre existe; el rollback "vuelta atrás" alternativo (empujar un tag apuntando al commit previo) sigue funcionando.
