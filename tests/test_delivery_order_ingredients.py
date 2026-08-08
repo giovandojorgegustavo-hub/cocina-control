@@ -346,3 +346,108 @@ async def test_correct_carries_ingredients_to_the_new_order(
     assert detail.status_code == 200, detail.text
     ingredients = detail.json()["items"][0]["ingredients"]
     assert [i["ingredient_id"] for i in ingredients] == [str(choclo.id)]
+
+
+# ---------------------------------------------------------------------------
+# Huecos senalados por la revision de qa sobre este PR
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_product_cannot_be_its_own_ingredient(
+    client: AsyncClient, db_session: Session, cocinero_user, cocinero_token
+):
+    """Un bowl ingrediente de si mismo se contaria dos veces en la receta."""
+    plato = _make_product(db_session, cocinero_user.id, "ARMA TU BOWL", is_sale=True)
+    order = _make_pending_order(db_session, cocinero_user.id)
+
+    response = await client.post(
+        f"{_BASE}/{order.id}/complete",
+        json={
+            "items": [
+                {
+                    "product_id": str(plato.id),
+                    "quantity": "1",
+                    "ingredients": [{"ingredient_id": str(plato.id)}],
+                }
+            ]
+        },
+        headers=_auth(cocinero_token),
+    )
+
+    assert response.status_code == 422, response.text
+
+
+@pytest.mark.asyncio
+async def test_correct_also_rejects_invalid_ingredients(
+    client: AsyncClient, db_session: Session, cocinero_user, cocinero_token
+):
+    """_validate_ingredients es compartida — si alguien la quita de correct,
+    este test lo delata. Antes solo se probaba el happy path de correccion."""
+    plato = _make_product(db_session, cocinero_user.id, "FOCUS BOWL", is_sale=True)
+    retirado = _make_product(db_session, cocinero_user.id, "CHUCRUT VIEJO", is_active=False)
+    order = _make_pending_order(db_session, cocinero_user.id)
+
+    completed = await client.post(
+        f"{_BASE}/{order.id}/complete",
+        json={"items": [{"product_id": str(plato.id), "quantity": "1"}]},
+        headers=_auth(cocinero_token),
+    )
+    assert completed.status_code == 200, completed.text
+
+    corrected = await client.post(
+        f"{_BASE}/{order.id}/correct",
+        json={
+            "items": [
+                {
+                    "product_id": str(plato.id),
+                    "quantity": "1",
+                    "ingredients": [{"ingredient_id": str(retirado.id)}],
+                }
+            ]
+        },
+        headers=_auth(cocinero_token),
+    )
+
+    assert corrected.status_code == 400, corrected.text
+    assert str(retirado.id) in corrected.json()["detail"]["invalid_ids"]
+
+
+@pytest.mark.asyncio
+async def test_ingredients_are_grouped_by_their_own_item(
+    client: AsyncClient, db_session: Session, cocinero_user, cocinero_token
+):
+    """La respuesta agrupa en una sola consulta. Con un solo item, asignar
+    todos los ingredientes al primero se veria igual de bien."""
+    bowl = _make_product(db_session, cocinero_user.id, "ARMA TU BOWL", is_sale=True)
+    wrap = _make_product(db_session, cocinero_user.id, "ARMA TU WRAP", is_sale=True)
+    quinua = _make_product(db_session, cocinero_user.id, "QUINUA")
+    tomate = _make_product(db_session, cocinero_user.id, "TOMATE")
+    order = _make_pending_order(db_session, cocinero_user.id)
+
+    response = await client.post(
+        f"{_BASE}/{order.id}/complete",
+        json={
+            "items": [
+                {
+                    "product_id": str(bowl.id),
+                    "quantity": "1",
+                    "ingredients": [{"ingredient_id": str(quinua.id)}],
+                },
+                {
+                    "product_id": str(wrap.id),
+                    "quantity": "1",
+                    "ingredients": [{"ingredient_id": str(tomate.id)}],
+                },
+            ]
+        },
+        headers=_auth(cocinero_token),
+    )
+
+    assert response.status_code == 200, response.text
+    por_producto = {
+        i["product_id"]: [g["ingredient_id"] for g in i["ingredients"]]
+        for i in response.json()["items"]
+    }
+    assert por_producto[str(bowl.id)] == [str(quinua.id)]
+    assert por_producto[str(wrap.id)] == [str(tomate.id)]

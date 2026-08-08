@@ -67,6 +67,17 @@ class DeliveryOrderCompleteItem(BaseModel):
     ingredients: list[DeliveryOrderCompleteIngredient] = []
 
     @model_validator(mode="after")
+    def _no_self_ingredient(self) -> "DeliveryOrderCompleteItem":
+        # Un plato no se lleva a si mismo. product_recipe ya lo prohibe por
+        # CHECK, pero esta tabla no puede: la restriccion vive entre dos
+        # columnas de filas distintas. Sin esta guarda, un bowl declarado como
+        # ingrediente de si mismo entra como dato bueno y sale contado dos
+        # veces en cualquier analisis de receta.
+        if any(i.ingredient_id == self.product_id for i in self.ingredients):
+            raise ValueError(f"A product cannot be its own ingredient: {self.product_id}")
+        return self
+
+    @model_validator(mode="after")
     def _no_duplicate_ingredients(self) -> "DeliveryOrderCompleteItem":
         # El indice unico de la base lo rechazaria igual, pero con un 409 que
         # no dice cual se repitio. Dos filas del mismo insumo duplicarian el
