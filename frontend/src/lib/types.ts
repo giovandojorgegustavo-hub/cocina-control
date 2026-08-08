@@ -59,8 +59,24 @@ export interface DeliveryOrderDetail {
   items: DeliveryOrderItem[]
 }
 
+/**
+ * Un ingrediente de una linea de pedido.
+ *
+ * quantity no se envia desde la tablet: la cocina todavia no midio gramajes y
+ * pedirle un numero al operario en hora punta produciria un dato inventado.
+ * status distingue lo que salio de lo que se pidio y no habia.
+ */
+export interface CompleteOrderIngredient {
+  ingredient_id: string
+  status?: 'included' | 'out_of_stock'
+}
+
 export interface CompleteOrderPayload {
-  items: Array<{ product_id: string; quantity: number }>
+  items: Array<{
+    product_id: string
+    quantity: number
+    ingredients?: CompleteOrderIngredient[]
+  }>
 }
 
 // ---------------------------------------------------------------------------

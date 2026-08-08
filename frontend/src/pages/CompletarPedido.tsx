@@ -240,6 +240,110 @@ function ProductCard({ product, quantity, onTap, onDecrease }: ProductCardProps)
 }
 
 // ---------------------------------------------------------------------------
+// Ingredientes de una linea de pedido
+//
+// No se pide cantidad. La cocina todavia no midio gramajes y exigirle un
+// numero al operario en hora punta produciria un dato inventado que despues
+// nadie vuelve a cuestionar. Primero se captura QUE lleva el plato.
+//
+// El filtro no es decorativo: el catalogo activo pasa los 70 productos y sin
+// el, encontrar "chucrut col morada" entre chips seria peor que no registrarlo.
+// ---------------------------------------------------------------------------
+
+type IngredientStatus = 'included' | 'out_of_stock'
+
+function IngredientesPanel({
+  producto,
+  candidatos,
+  seleccion,
+  onToggle,
+  onToggleAgotado,
+}: {
+  producto: Product
+  candidatos: Product[]
+  seleccion: Map<string, IngredientStatus>
+  onToggle: (ingredientId: string) => void
+  onToggleAgotado: (ingredientId: string) => void
+}) {
+  const [filtro, setFiltro] = useState('')
+
+  const termino = filtro.trim().toLowerCase()
+  const visibles = candidatos.filter(
+    (c) => c.id !== producto.id && (termino === '' || c.name.toLowerCase().includes(termino)),
+  )
+
+  return (
+    <section
+      className="border-t border-gray-200 px-4 py-4"
+      data-testid={`ingredientes-${producto.id}`}
+    >
+      <p className="text-sm font-semibold text-gray-700">
+        ¿que lleva el {producto.name}?{' '}
+        <span className="font-normal text-gray-500">(opcional)</span>
+      </p>
+
+      <input
+        type="text"
+        value={filtro}
+        onChange={(e) => setFiltro(e.target.value)}
+        placeholder="buscar ingrediente"
+        aria-label={`Buscar ingrediente para ${producto.name}`}
+        data-testid={`filtro-ingredientes-${producto.id}`}
+        className="mt-2 min-h-[44px] w-full px-3 border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
+      />
+
+      {visibles.length === 0 ? (
+        <p className="mt-3 text-sm text-gray-500">sin resultados para "{filtro}"</p>
+      ) : (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {visibles.map((c) => {
+            const estado = seleccion.get(c.id)
+            const agotado = estado === 'out_of_stock'
+            return (
+              <span key={c.id} className="inline-flex">
+                <button
+                  type="button"
+                  onClick={() => onToggle(c.id)}
+                  aria-pressed={estado !== undefined}
+                  aria-label={`${c.name}${agotado ? ', se acabo' : estado ? ', incluido' : ', sin seleccionar'}`}
+                  className={[
+                    'min-h-[44px] px-3 text-sm font-semibold border-2',
+                    agotado
+                      ? 'bg-amber-100 border-amber-500 text-amber-900 line-through'
+                      : estado
+                        ? 'bg-gray-900 border-gray-900 text-white'
+                        : 'bg-white border-gray-200 text-gray-900',
+                  ].join(' ')}
+                >
+                  {c.name}
+                </button>
+
+                {estado !== undefined && (
+                  <button
+                    type="button"
+                    onClick={() => onToggleAgotado(c.id)}
+                    aria-label={`Marcar ${c.name} como ${agotado ? 'incluido' : 'se acabo'}`}
+                    data-testid={`agotado-${c.id}`}
+                    className={[
+                      'min-h-[44px] px-2 text-xs font-bold uppercase border-2 border-l-0',
+                      agotado
+                        ? 'bg-amber-500 border-amber-500 text-white'
+                        : 'bg-gray-100 border-gray-200 text-gray-600',
+                    ].join(' ')}
+                  >
+                    {agotado ? 'se acabo' : 'no habia'}
+                  </button>
+                )}
+              </span>
+            )
+          })}
+        </div>
+      )}
+    </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Product grid skeleton
 // ---------------------------------------------------------------------------
 
@@ -283,7 +387,16 @@ export function CompletarPedido() {
   // el backend exige owner/admin para crear productos; el cocinero no ve el +
   const canCreateSale = role === 'owner' || role === 'admin'
 
+  // Catalogo completo para los ingredientes: una salsa es is_sale y aun asi es
+  // modificador del bowl en el ticket, asi que filtrar por 'purchase' dejaria
+  // afuera el caso mas frecuente. El backend valida lo mismo: producto activo.
+  const { data: allProducts } = useProducts()
+
   const [selections, setSelections] = useState<Map<string, ProductSelection>>(new Map())
+  // productId -> (ingredientId -> estado)
+  const [ingredients, setIngredients] = useState<Map<string, Map<string, IngredientStatus>>>(
+    new Map(),
+  )
   const [screen, setScreen] = useState<'form' | 'confirmed'>('form')
   const [showError, setShowError] = useState(true)
 
@@ -321,6 +434,15 @@ export function CompletarPedido() {
       if (!existing) return prev
       if (existing.quantity <= 1) {
         next.delete(productId)
+        // Deseleccionar el plato tira sus ingredientes: dejarlos colgados los
+        // reviviria si el operario vuelve a tocar el mismo producto, y estaria
+        // registrando algo que ya decidio que no salio.
+        setIngredients((prevIng) => {
+          if (!prevIng.has(productId)) return prevIng
+          const nextIng = new Map(prevIng)
+          nextIng.delete(productId)
+          return nextIng
+        })
       } else {
         next.set(productId, { ...existing, quantity: existing.quantity - 1 })
       }
@@ -328,13 +450,51 @@ export function CompletarPedido() {
     })
   }, [])
 
+  const handleToggleIngredient = useCallback((productId: string, ingredientId: string) => {
+    setIngredients((prev) => {
+      const next = new Map(prev)
+      const forProduct = new Map(next.get(productId) ?? [])
+      if (forProduct.has(ingredientId)) {
+        forProduct.delete(ingredientId)
+      } else {
+        forProduct.set(ingredientId, 'included')
+      }
+      next.set(productId, forProduct)
+      return next
+    })
+  }, [])
+
+  const handleToggleAgotado = useCallback((productId: string, ingredientId: string) => {
+    setIngredients((prev) => {
+      const next = new Map(prev)
+      const forProduct = new Map(next.get(productId) ?? [])
+      const actual = forProduct.get(ingredientId)
+      if (actual === undefined) return prev
+      forProduct.set(ingredientId, actual === 'out_of_stock' ? 'included' : 'out_of_stock')
+      next.set(productId, forProduct)
+      return next
+    })
+  }, [])
+
   async function handleTerminar() {
     if (totalSelected === 0 || !id) return
 
-    const items = Array.from(selections.values()).map((s) => ({
-      product_id: s.product.id,
-      quantity: s.quantity,
-    }))
+    const items = Array.from(selections.values()).map((s) => {
+      const forProduct = ingredients.get(s.product.id)
+      // Sin ingredientes se omite la clave en vez de mandar []: el backend la
+      // trata igual, pero el cuerpo dice lo que paso — no se declaro nada.
+      if (!forProduct || forProduct.size === 0) {
+        return { product_id: s.product.id, quantity: s.quantity }
+      }
+      return {
+        product_id: s.product.id,
+        quantity: s.quantity,
+        ingredients: Array.from(forProduct.entries()).map(([ingredient_id, status]) => ({
+          ingredient_id,
+          status,
+        })),
+      }
+    })
 
     try {
       await completeOrder.mutateAsync({ items })
@@ -424,6 +584,22 @@ export function CompletarPedido() {
               )}
             </div>
           )}
+
+          {/* Un panel por plato seleccionado. Aparecen recien cuando hay algo
+              que describir, para que la pantalla siga vacia al entrar. */}
+          {allProducts &&
+            Array.from(selections.values()).map((s) => (
+              <IngredientesPanel
+                key={s.product.id}
+                producto={s.product}
+                candidatos={allProducts}
+                seleccion={ingredients.get(s.product.id) ?? new Map()}
+                onToggle={(ingredientId) => handleToggleIngredient(s.product.id, ingredientId)}
+                onToggleAgotado={(ingredientId) =>
+                  handleToggleAgotado(s.product.id, ingredientId)
+                }
+              />
+            ))}
 
           {!isLoading && products && products.length === 0 && !canCreateSale && (
             <div className="px-4 py-8 text-center">
