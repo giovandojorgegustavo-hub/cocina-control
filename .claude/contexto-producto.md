@@ -44,6 +44,11 @@ Dos usuarios con mundos separados a propósito:
   Botones grandes, respuesta instantánea. Si un flujo pide más, está mal diseñado.
 - El dueño valora **confianza en el dato**: conteo a ciegas, verificación sin
   sesgo, y trazabilidad completa (todo evento tiene quién, qué, cuándo).
+- **No detenerse, en ese orden: primero seguir trabajando, después registrar
+  completo.** Un registro parcial que deja al cocinero seguir vale más que uno
+  completo que lo frena. Un formulario que exige todos los campos antes de
+  guardar puede cumplir los 5 segundos y los 3 toques y aun asi estar mal: en
+  hora punta no se usa mal, se deja de usar.
 
 ## Qué restricciones tiene (no negociables)
 
@@ -53,8 +58,12 @@ Dos usuarios con mundos separados a propósito:
    obligatorio.
 2. **El cocinero no ve análisis**: ni totales, ni esperados fuera de la lista
    pre-cargada, ni recetas, ni factores, ni discrepancias. El conteo es a ciegas.
-3. **Append-only**: nada se borra ni se edita sin rastro; toda corrección es un
-   registro nuevo que apunta al original.
+3. **Append-only Y ATRIBUIDO**: nada se borra ni se edita sin rastro; toda
+   corrección es un registro nuevo que apunta al original **y que dice quién la
+   hizo**. Las dos mitades son obligatorias: una corrección con `corrects_id`
+   pero sin usuario cumple la mitad y no sirve. Si la atribución se ensucia, el
+   dueño pierde la única forma que tiene de saber quién contó mal — y sin eso,
+   el conteo a ciegas deja de ser verificable.
 4. **Captura en unidad natural** (paltas por unidad, espinaca en gramos, piña
    en latas): nadie convierte nada en el momento de registrar.
 5. Moneda única **PEN** (2 decimales). Zona horaria del negocio
