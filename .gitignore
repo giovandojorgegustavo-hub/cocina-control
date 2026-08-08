@@ -22,3 +22,7 @@ build/
 # Testing / linting
 .pytest_cache/
 .ruff_cache/
+
+# Lo escribe el paso de despliegue con el SHA que corre el proceso (issue #150).
+# Nunca se versiona: es metadata del artefacto desplegado, no del codigo.
+COMMIT
