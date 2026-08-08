@@ -274,13 +274,21 @@ jobs:
           SSH_USER: ${{ secrets.PROD_SSH_USER }}
           DEPLOY_PATH: ${{ secrets.PROD_DEPLOY_PATH }}
           TAG: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          ssh "${SSH_USER}@${SSH_HOST}" bash -s -- "${TAG}" "${DEPLOY_PATH}" <<'REMOTE'
+          ssh "${SSH_USER}@${SSH_HOST}" bash -s -- "${TAG}" "${DEPLOY_PATH}" "${SHA}" <<'REMOTE'
           set -euo pipefail
           TAG="$1"
           DEPLOY_PATH="$2"
+          SHA="$3"
           cd "${DEPLOY_PATH}"
+          # El SHA que corre el proceso vivo, para GET /health (issue #150).
+          # Se escribe ANTES del restart: el modulo lo lee al arrancar, una
+          # sola vez. No se resuelve con `git rev-parse` porque el rsync
+          # excluye .git/ y ese checkout no avanza con los despliegues —
+          # devolveria un SHA real pero equivocado.
+          printf '%s\n' "${SHA}" > COMMIT
           echo "--- Installing frozen deps ---"
           uv sync --frozen
           echo "--- Running alembic upgrade head ---"
