@@ -390,3 +390,12 @@ una cuenta que no tiene rol `cocinero`.
 2. `curl -sf https://bonabowl.com/interno/manifest.webmanifest | jq .name` → `"Cocina Control"`.
 3. Login como dueño desde el navegador — sesión inicia, redirige a `/interno/tablero`.
 4. En el server: `sudo journalctl -u cocina-control -n 50 --no-pager` sin errores nuevos.
+
+## Versionado
+
+- Los tags de version siguen semver (`vMAYOR.MENOR.PARCHE`).
+
+Esta regla vivia en `CLAUDE.md`. Se movio aca cuando el repo se dio de alta en
+la fabrica: `CLAUDE.md` pasa a ser un artefacto vendored —lo pisa
+`sincronizar-desde-fabrica.sh` en cada sync— y una regla propia del repo ahi
+se pierde en silencio. `docs/` es del repo.
