@@ -15,7 +15,7 @@
  */
 import { useEffect, useRef, useState, useCallback, type RefObject } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { enqueuePhoto, flushQueue, compressCanvas } from '../lib/photoQueue'
+import { enqueuePhoto, flushQueue, compressCanvas, onPhotoUploaded } from '../lib/photoQueue'
 
 type ScreenState = 'camera' | 'confirmed' | 'no-camera' | 'permission-denied' | 'photo-too-large'
 
@@ -79,7 +79,7 @@ function NoCameraView({ reason }: { reason: 'unavailable' | 'denied' }) {
   )
 }
 
-function ConfirmedView({ time }: { time: string }) {
+function ConfirmedView({ time, waiting }: { time: string; waiting: boolean }) {
   return (
     <div
       className="h-screen flex flex-col items-center justify-center bg-gray-900 text-white gap-6"
@@ -108,13 +108,21 @@ function ConfirmedView({ time }: { time: string }) {
 
       <div className="text-center">
         <p className="text-3xl font-black tracking-widest uppercase">PEDIDO GUARDADO</p>
-        <p className="mt-3 text-gray-300 text-base">
-          {time} — queda PENDIENTE en la bandeja,
-        </p>
-        <p className="text-gray-300 text-base">completalo cuando puedas</p>
+        {waiting ? (
+          <p className="mt-3 text-gray-300 text-base">{time} — abriendo el detalle</p>
+        ) : (
+          <>
+            <p className="mt-3 text-gray-300 text-base">
+              {time} — queda PENDIENTE en la bandeja,
+            </p>
+            <p className="text-gray-300 text-base">completalo cuando puedas</p>
+          </>
+        )}
       </div>
 
-      <p className="text-gray-500 text-sm mt-4">volviendo a la bandeja...</p>
+      <p className="text-gray-500 text-sm mt-4">
+        {waiting ? 'subiendo la foto...' : 'volviendo a la bandeja...'}
+      </p>
     </div>
   )
 }
@@ -151,9 +159,13 @@ function PhotoTooLargeView({ onRetry }: { onRetry: () => void }) {
 function CameraView({
   videoRef,
   onShutter,
+  completarDespues,
+  onToggleCompletarDespues,
 }: {
   videoRef: RefObject<HTMLVideoElement>
   onShutter: () => void
+  completarDespues: boolean
+  onToggleCompletarDespues: (value: boolean) => void
 }) {
   const navigate = useNavigate()
 
@@ -192,6 +204,24 @@ function CameraView({
 
       {/* Shutter area */}
       <div className="flex-shrink-0 bg-gray-900 pb-8 pt-6 flex flex-col items-center gap-4">
+        {/* Premarcada a proposito: el camino por defecto sigue siendo sacar la
+            foto y seguir, que es el unico que aguanta la hora punta. Quien
+            tiene un minuto la desmarca y carga el detalle en el acto. */}
+        <label
+          className="flex items-center gap-3 text-white text-sm px-4 min-h-[48px] cursor-pointer select-none"
+          data-testid="completar-despues-label"
+        >
+          <input
+            type="checkbox"
+            checked={completarDespues}
+            onChange={(e) => onToggleCompletarDespues(e.target.checked)}
+            aria-label="Completar despues"
+            data-testid="completar-despues"
+            className="w-6 h-6 accent-white"
+          />
+          <span className="font-semibold">completar despues</span>
+        </label>
+
         <button
           onClick={onShutter}
           aria-label="Sacar foto"
@@ -211,7 +241,9 @@ function CameraView({
           <span className="w-14 h-14 rounded-full bg-white border-2 border-gray-300 block" />
         </button>
         <p className="text-gray-400 text-sm text-center px-4">
-          saca la foto y segui — el detalle se completa despues
+          {completarDespues
+            ? 'saca la foto y segui — el detalle se completa despues'
+            : 'saca la foto y carga el detalle en el acto'}
         </p>
       </div>
     </div>
@@ -234,6 +266,11 @@ export function NuevoPedido() {
   const shuttingRef = useRef<boolean>(false)
   const [screen, setScreen] = useState<ScreenState>('camera')
   const [confirmedTime, setConfirmedTime] = useState('')
+  // Premarcada: el default sigue siendo no esperar a nadie.
+  const [completarDespues, setCompletarDespues] = useState(true)
+  // localId de la foto cuyo id de servidor estamos esperando. null = no
+  // esperamos nada, que es el caso normal.
+  const pendingLocalIdRef = useRef<string | null>(null)
 
   // Start the camera stream on mount
   useEffect(() => {
@@ -284,14 +321,34 @@ export function NuevoPedido() {
     }
   })
 
-  // Navigate home 1.5 s after confirmation screen appears (H-09: with cleanup)
+  // Cuando el operario eligio completar en el acto, el destino es el detalle
+  // del pedido — y su id recien existe cuando la foto termino de subir.
+  useEffect(() => {
+    return onPhotoUploaded((localId, serverId) => {
+      if (pendingLocalIdRef.current !== localId) return
+      pendingLocalIdRef.current = null
+      navigate(`/pedidos/${serverId}/completar`, { replace: true })
+    })
+  }, [navigate])
+
+  // Salida del confirmatorio (H-09: con cleanup).
+  //
+  // Con "completar despues" nadie espera nada: 1.5 s y a la bandeja, igual que
+  // siempre. Sin ella hay que esperar el id del servidor, y este timeout es la
+  // red: sin senal, o si el backend rechazo, el operario no se queda colgado
+  // mirando una pantalla. Cae a la bandeja y el pedido queda pendiente — que
+  // es exactamente el estado seguro y el que ya sabe resolver.
   useEffect(() => {
     if (screen !== 'confirmed') return
-    const t = setTimeout(() => {
-      navigate('/pedidos', { replace: true })
-    }, 1500)
+    const t = setTimeout(
+      () => {
+        pendingLocalIdRef.current = null
+        navigate('/pedidos', { replace: true })
+      },
+      completarDespues ? 1500 : 10_000,
+    )
     return () => clearTimeout(t)
-  }, [screen, navigate])
+  }, [screen, completarDespues, navigate])
 
   const handleShutter = useCallback(() => {
     // H-02: guard against double-tap
@@ -341,16 +398,21 @@ export function NuevoPedido() {
       }
       if (!blob) return
       const localId = generateLocalId()
+      // Se anota ANTES de encolar: si la subida resuelve rapido, el listener
+      // ya tiene contra que comparar.
+      if (!completarDespues) pendingLocalIdRef.current = localId
       void enqueuePhoto(blob, localId).then(() => {
         // Kick off upload attempt immediately if we're online
         void flushQueue()
       })
     })
-  }, [])
+  }, [completarDespues])
 
   if (screen === 'no-camera') return <NoCameraView reason="unavailable" />
   if (screen === 'permission-denied') return <NoCameraView reason="denied" />
-  if (screen === 'confirmed') return <ConfirmedView time={confirmedTime} />
+  if (screen === 'confirmed') {
+    return <ConfirmedView time={confirmedTime} waiting={!completarDespues} />
+  }
   if (screen === 'photo-too-large') {
     return (
       <PhotoTooLargeView
@@ -362,5 +424,12 @@ export function NuevoPedido() {
     )
   }
 
-  return <CameraView videoRef={videoRef} onShutter={handleShutter} />
+  return (
+    <CameraView
+      videoRef={videoRef}
+      onShutter={handleShutter}
+      completarDespues={completarDespues}
+      onToggleCompletarDespues={setCompletarDespues}
+    />
+  )
 }

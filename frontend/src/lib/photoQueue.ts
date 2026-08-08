@@ -51,6 +51,26 @@ function notify(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Upload-resolved bus — NuevoPedido lo necesita cuando el operario eligio
+// completar el pedido en el acto: recien ahi existe el id del servidor al que
+// hay que navegar. La cola sigue sin bloquear a nadie; el que espera es el
+// operario que decidio esperar.
+// ---------------------------------------------------------------------------
+
+type UploadedListener = (localId: string, serverId: string) => void
+
+const uploadedListeners = new Set<UploadedListener>()
+
+export function onPhotoUploaded(cb: UploadedListener): () => void {
+  uploadedListeners.add(cb)
+  return () => uploadedListeners.delete(cb)
+}
+
+function notifyUploaded(localId: string, serverId: string): void {
+  uploadedListeners.forEach((cb) => cb(localId, serverId))
+}
+
+// ---------------------------------------------------------------------------
 // IndexedDB helpers
 // ---------------------------------------------------------------------------
 
@@ -256,9 +276,7 @@ async function uploadEntry(
     }
     // Delete after successful upload — blob served its purpose
     await deleteEntry(entry.localId)
-    // Suppress unused variable warning; serverId is returned by the API but
-    // we don't need it after deleting the entry.
-    void serverId
+    notifyUploaded(entry.localId, serverId)
   } catch (err: unknown) {
     // If the server rejected with 401, don't schedule a retry — leave as queued
     // but with a far-future nextRetryAt so it won't loop. The api interceptor
