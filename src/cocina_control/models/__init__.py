@@ -10,6 +10,7 @@ from cocina_control.models.purchase_order import (
     PurchaseOrderItemCost,
     PurchaseOrderStatusEvent,
 )
+from cocina_control.models.recipe import DeliveryOrderItemIngredient, ProductRecipe
 from cocina_control.models.service_principal import ServicePrincipal
 from cocina_control.models.supplier import Supplier
 from cocina_control.models.user import User
@@ -19,9 +20,11 @@ __all__ = [
     "DeliveryItem",
     "DeliveryOrder",
     "DeliveryOrderItem",
+    "DeliveryOrderItemIngredient",
     "InventoryCount",
     "InventoryCountItem",
     "Product",
+    "ProductRecipe",
     "PurchaseOrder",
     "PurchaseOrderItem",
     "PurchaseOrderItemCost",
