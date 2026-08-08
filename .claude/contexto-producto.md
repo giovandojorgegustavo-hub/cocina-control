@@ -63,7 +63,14 @@ Dos usuarios con mundos separados a propósito:
    pantalla al instante y se sube en segundo plano; sin red, el pedido queda
    pendiente y se completa después. Un cambio que rompa esto es hallazgo
    bloqueante aunque el código esté impecable.
-7. **Los datos que todavía no existen se dejan vacíos, no se inventan.** La
+7. **Una sola cosa a la vez: cada pantalla es autosuficiente.** El operario no
+   compara pantallas ni recuerda datos de una a la otra — todo lo necesario
+   para completar la accion en curso esta visible en ESA pantalla. Es mas
+   estricta que el limite de 3 toques y por una razon concreta: en hora punta
+   lo interrumpen entre paso y paso. Si el paso 2 depende de algo que vio en
+   el paso 1, vuelve sin recordarlo y confirma el item equivocado. Eso produce
+   un dato falso con atribucion correcta, que es indetectable despues.
+8. **Los datos que todavía no existen se dejan vacíos, no se inventan.** La
    cocina no midió gramajes; pedirle un número al operario en hora punta
    produce un dato falso que después nadie vuelve a cuestionar. NULL significa
    "no medido"; cero significaría "medido, y es nada".
