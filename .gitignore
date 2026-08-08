@@ -22,3 +22,8 @@ build/
 # Testing / linting
 .pytest_cache/
 .ruff_cache/
+
+# Configuracion de deploy.sh: apunta a una maquina concreta y deploy.sh
+# rechaza el archivo si no es del operador con permisos 600 (fabrica#22).
+# El ejemplo versionado es scripts/deploy.env.example.
+scripts/deploy.env
