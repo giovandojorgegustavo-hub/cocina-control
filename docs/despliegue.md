@@ -399,3 +399,37 @@ Esta regla vivia en `CLAUDE.md`. Se movio aca cuando el repo se dio de alta en
 la fabrica: `CLAUDE.md` pasa a ser un artefacto vendored —lo pisa
 `sincronizar-desde-fabrica.sh` en cada sync— y una regla propia del repo ahi
 se pierde en silencio. `docs/` es del repo.
+
+## `scripts/deploy.sh` y `scripts/deploy.env`
+
+`deploy.sh` llego con el alta del repo en la fabrica. **Hoy no es el camino de
+despliegue de este repo**: los releases salen por `.github/workflows/release.yml`
+al empujar un tag `v*`, con aprobacion manual del entorno `produccion`.
+
+`deploy.sh` sirve como **verificacion manual desde el server** — reinicia el
+servicio y hace el smoke test contra el endpoint de salud, comprobando que
+`status` sea `ok` y que `commit` coincida con lo desplegado.
+
+Necesita `scripts/deploy.env`, que **no se versiona**: el propio script rechaza
+el archivo si no pertenece al operador o si tiene permiso de escritura para
+grupo u otros. Versionarlo haria imposible cumplir ese contrato.
+
+Para crearlo en el server:
+
+```bash
+cp scripts/deploy.env.example scripts/deploy.env
+chmod 600 scripts/deploy.env
+```
+
+El ejemplo trae los valores reales de esta instalacion y explica cada uno. El
+que mas cuidado pide es `HEALTH_URL`: el contrato de fabrica asume `/salud` y
+este repo expone `/health` desde antes de darse de alta, asi que se declara
+explicitamente (el contrato lo permite). Renombrar el endpoint obliga a tocar
+tambien el paso `Verify /health responds` del workflow de release.
+
+### Decision pendiente
+
+Falta decidir si `deploy.sh` se adopta como paso del DoD —"desplegado y
+verificado"— o si esa verificacion se integra al workflow de release, que es
+donde ya vive el despliegue real. Son dos mecanismos para el mismo fin y
+mantener los dos tiene costo. Ver issue #152.
