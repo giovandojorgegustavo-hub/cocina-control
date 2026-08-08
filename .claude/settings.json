@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/fiax/bitacora/scripts/hooks/on_session_start.py"
+            "command": "if [ -x /home/fiax/bitacora/scripts/hooks/on_session_start.py ]; then /home/fiax/bitacora/scripts/hooks/on_session_start.py || echo \"hook on_session_start fallo (la sesion sigue)\" >&2; fi"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/fiax/bitacora/scripts/hooks/on_user_prompt.py"
+            "command": "if [ -x /home/fiax/bitacora/scripts/hooks/on_user_prompt.py ]; then /home/fiax/bitacora/scripts/hooks/on_user_prompt.py || echo \"hook on_user_prompt fallo (la sesion sigue)\" >&2; fi"
           }
         ]
       }
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/fiax/bitacora/scripts/hooks/on_post_tool_use.py"
+            "command": "if [ -x /home/fiax/bitacora/scripts/hooks/on_post_tool_use.py ]; then /home/fiax/bitacora/scripts/hooks/on_post_tool_use.py || echo \"hook on_post_tool_use fallo (la sesion sigue)\" >&2; fi"
           }
         ]
       }
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/fiax/bitacora/scripts/hooks/on_stop.py"
+            "command": "if [ -x /home/fiax/bitacora/scripts/hooks/on_stop.py ]; then /home/fiax/bitacora/scripts/hooks/on_stop.py || echo \"hook on_stop fallo (la sesion sigue)\" >&2; fi"
           }
         ]
       }
