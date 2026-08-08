@@ -50,6 +50,7 @@ from cocina_control.config import get_settings
 from cocina_control.db import get_session
 from cocina_control.models.delivery_order import DeliveryOrder, DeliveryOrderItem
 from cocina_control.models.product import Product
+from cocina_control.models.recipe import DeliveryOrderItemIngredient
 from cocina_control.models.user import User
 from cocina_control.schemas.delivery_order import (
     DeliveryOrderCancel,
@@ -59,6 +60,7 @@ from cocina_control.schemas.delivery_order import (
     DeliveryOrderCorrectResponse,
     DeliveryOrderCreatedResponse,
     DeliveryOrderDetailResponse,
+    DeliveryOrderIngredientResponse,
     DeliveryOrderItemResponse,
     DeliveryOrderListItem,
     DeliveryOrderPhotoResponse,
@@ -108,23 +110,76 @@ def _is_leaf_order(session: Session, order_id: uuid.UUID) -> bool:
     return corrector is None
 
 
-def _validate_products(
-    session: Session, items: list
-) -> dict[uuid.UUID, Product]:
+def _validate_products(session: Session, items: list) -> dict[uuid.UUID, Product]:
     product_ids = [item.product_id for item in items]
     rows = session.scalars(select(Product).where(Product.id.in_(product_ids))).all()
     found = {p.id: p for p in rows}
-    invalid = [
-        str(pid)
-        for pid in product_ids
-        if pid not in found or not found[pid].is_active
-    ]
+    invalid = [str(pid) for pid in product_ids if pid not in found or not found[pid].is_active]
     if invalid:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"message": "Invalid or inactive product_ids", "invalid_ids": invalid},
         )
     return found
+
+
+def _validate_ingredients(session: Session, items: list) -> None:
+    """Reject ingredient_ids that do not name an active product.
+
+    No se exige is_purchase. Una salsa es is_sale (se vende suelta) y a la vez
+    es el modificador que el ticket declara dentro del bowl; exigir insumo puro
+    rechazaria justo el caso mas frecuente.
+    """
+    ingredient_ids = {ingredient.ingredient_id for item in items for ingredient in item.ingredients}
+    if not ingredient_ids:
+        return
+
+    rows = session.scalars(select(Product).where(Product.id.in_(ingredient_ids))).all()
+    found = {p.id: p for p in rows}
+    invalid = [
+        str(pid)
+        for pid in sorted(ingredient_ids, key=str)
+        if pid not in found or not found[pid].is_active
+    ]
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "message": "Invalid or inactive ingredient_ids",
+                "invalid_ids": invalid,
+            },
+        )
+
+
+def _persist_items(session: Session, order_id: uuid.UUID, items: list, actor_id: uuid.UUID) -> None:
+    """Insert product lines and their ingredients for an order.
+
+    Compartido por complete y correct a proposito: son el mismo acto de
+    registro y no deben poder divergir. El asistente de WhatsApp entra por
+    estos mismos endpoints con su service principal, asi que tampoco existe
+    una segunda ruta de escritura que mantener alineada.
+    """
+    for item_in in items:
+        item = DeliveryOrderItem(
+            id=uuid.uuid4(),
+            delivery_order_id=order_id,
+            product_id=item_in.product_id,
+            quantity=item_in.quantity,
+            created_by=actor_id,
+        )
+        session.add(item)
+
+        for ingredient_in in item_in.ingredients:
+            session.add(
+                DeliveryOrderItemIngredient(
+                    id=uuid.uuid4(),
+                    delivery_order_item_id=item.id,
+                    ingredient_id=ingredient_in.ingredient_id,
+                    quantity=ingredient_in.quantity,
+                    status=ingredient_in.status,
+                    created_by=actor_id,
+                )
+            )
 
 
 def _get_leaf_items(session: Session, order_id: uuid.UUID) -> list[DeliveryOrderItem]:
@@ -142,24 +197,43 @@ def _get_leaf_items(session: Session, order_id: uuid.UUID) -> list[DeliveryOrder
     )
 
 
-def _build_item_responses(
-    session: Session, order_id: uuid.UUID
-) -> list[DeliveryOrderItemResponse]:
+def _build_item_responses(session: Session, order_id: uuid.UUID) -> list[DeliveryOrderItemResponse]:
     leaf_items = _get_leaf_items(session, order_id)
+    if not leaf_items:
+        return []
+
+    # Una sola consulta para todos los ingredientes del pedido. Con una por
+    # linea, un pedido de 3 platos armados costaria 4 roundtrips en una tablet
+    # que ya trabaja sobre red de local comercial.
+    ingredient_rows = session.scalars(
+        select(DeliveryOrderItemIngredient).where(
+            DeliveryOrderItemIngredient.delivery_order_item_id.in_([item.id for item in leaf_items])
+        )
+    ).all()
+    by_item: dict[uuid.UUID, list[DeliveryOrderIngredientResponse]] = {}
+    for row in ingredient_rows:
+        by_item.setdefault(row.delivery_order_item_id, []).append(
+            DeliveryOrderIngredientResponse(
+                id=row.id,
+                ingredient_id=row.ingredient_id,
+                quantity=row.quantity,
+                status=row.status,
+            )
+        )
+
     return [
         DeliveryOrderItemResponse(
             id=item.id,
             product_id=item.product_id,
             quantity=item.quantity,
             created_at=item.created_at,
+            ingredients=by_item.get(item.id, []),
         )
         for item in leaf_items
     ]
 
 
-def _order_to_detail(
-    session: Session, order: DeliveryOrder
-) -> DeliveryOrderDetailResponse:
+def _order_to_detail(session: Session, order: DeliveryOrder) -> DeliveryOrderDetailResponse:
     items = _build_item_responses(session, order.id)
     return DeliveryOrderDetailResponse(
         id=order.id,
@@ -391,9 +465,7 @@ def list_orders(
             detail=f"Invalid status filter. Allowed values: {sorted(_VALID_STATUSES)}",
         )
 
-    stmt = (
-        select(DeliveryOrder).order_by(DeliveryOrder.created_at.desc()).limit(limit)
-    )
+    stmt = select(DeliveryOrder).order_by(DeliveryOrder.created_at.desc()).limit(limit)
     if status_filter is not None:
         stmt = stmt.where(DeliveryOrder.status == status_filter)
 
@@ -443,18 +515,11 @@ def complete_order(
         )
 
     _validate_products(session, body.items)
+    _validate_ingredients(session, body.items)
 
     now = datetime.now(UTC)
 
-    for item_in in body.items:
-        item = DeliveryOrderItem(
-            id=uuid.uuid4(),
-            delivery_order_id=order.id,
-            product_id=item_in.product_id,
-            quantity=item_in.quantity,
-            created_by=current_user.id,
-        )
-        session.add(item)
+    _persist_items(session, order.id, body.items, current_user.id)
 
     order.status = "completed"
     order.completed_at = now
@@ -595,15 +660,14 @@ def correct_order(
 
     # Enforce time-window for operators.
     if current_user.role in ("cocinero", "admin"):
-        if order.completed_at is None or not is_same_calendar_day_local(
-            order.completed_at, now
-        ):
+        if order.completed_at is None or not is_same_calendar_day_local(order.completed_at, now):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Correction window closed for operator",
             )
 
     _validate_products(session, body.items)
+    _validate_ingredients(session, body.items)
 
     platform = body.platform if body.platform is not None else order.platform
 
@@ -627,15 +691,7 @@ def correct_order(
         session.rollback()
         _handle_integrity_error(exc, "uq_delivery_orders_corrects_id")
 
-    for item_in in body.items:
-        item = DeliveryOrderItem(
-            id=uuid.uuid4(),
-            delivery_order_id=new_order.id,
-            product_id=item_in.product_id,
-            quantity=item_in.quantity,
-            created_by=current_user.id,
-        )
-        session.add(item)
+    _persist_items(session, new_order.id, body.items, current_user.id)
 
     # Flush 2: persist items — log only after both flushes succeed.
     session.flush()
