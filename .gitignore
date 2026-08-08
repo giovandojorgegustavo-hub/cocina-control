@@ -27,3 +27,7 @@ build/
 # rechaza el archivo si no es del operador con permisos 600 (fabrica#22).
 # El ejemplo versionado es scripts/deploy.env.example.
 scripts/deploy.env
+
+# Lo escribe el paso de despliegue con el SHA que corre el proceso (issue #150).
+# Nunca se versiona: es metadata del artefacto desplegado, no del codigo.
+COMMIT
