@@ -23,7 +23,7 @@ Las 8 decisiones abiertas de v0.3 fueron respondidas por el dueño en el PR #95:
 v0.4 rompe una asunción de v0.3 y toma dos decisiones de diseño nuevas:
 
 1. **Los productos dejan de ser islas — llegan las recetas.** El principio #4 ("productos como items independientes") se rompe deliberadamente, pero **solo del lado del análisis**: cada plato vendido tiene una receta estimada que se traduce en consumo teórico de insumos crudos. La captura no cambia: el operario sigue registrando compras, pedidos y conteos exactamente igual.
-2. **Sin fabricación.** La primera versión de este alcance incluía registrar la producción de intermedios (maracuyá procesado, salsas). El dueño la descartó (13 jul 2026): las recetas se **aplanan hasta el insumo crudo** — el bowl consume palta y yogurt, no "guacamole" — y los preparados que aparezcan en el conteo se resuelven con una **equivalencia** (ver sección E). Resultado: una sola entrada (compras), una sola salida (pedidos), cero pantallas nuevas para el operario.
+2. **Con fabricación (revisado 28 jul 2026).** El dueño había descartado registrar la producción de intermedios (13 jul 2026), resolviendo los preparados por **equivalencia declarada**. Esa decisión se revirtió: la equivalencia cierra la matemática pero cierra **ciega** — si un batch de pollo rinde 5 bolsitas en vez de 6, el sistema reporta fuga donde hubo merma, y el factor nunca se aprende. Ahora se registra la fabricación con un solo formulario (**pesar lo que entra → el sistema muestra los extras escalados → contar lo que sale**) y el factor de rinde pasa de estimado a **medido**. Las recetas de plato siguen **aplanadas hasta el insumo crudo**. Ver sección E y `docs/backend/diseno-fabricacion.md`.
 3. **Las cantidades ahora tienen unidad declarada.** La planilla real mezcla unidades por producto (paltas por unidad, espinaca en gramos, piña en latas, grapas en cajas de 10). El catálogo normaliza esto: cada producto declara su unidad natural y, si participa en recetas por peso, su factor de conversión a gramos.
 
 ## Alcance v0.3
@@ -151,18 +151,33 @@ La receta es la traducción de un plato vendido a insumos crudos consumidos. Es 
 > **DECISIÓN RESUELTA (PR #96) — merma esperada: adentro del estimado de la receta.**
 > Un solo número por ingrediente: la receta dice "120 g de palta" ya contando cáscara y pepa. La receta estima consumo de compra, no de plato servido.
 
-### E. Preparados: equivalencia, no fabricación
+### E. Preparados: fabricación registrada, equivalencia derivada
 
-Los preparados (maracuyá procesado, salsa BBQ) **no se registran cuando se hacen** — decisión deliberada del dueño. Pero aparecen en el conteo físico, y si el sistema los ignorara, cada batch a medio usar se leería como fuga falsa: las paltas "desaparecieron" pero el guacamole está en la heladera.
+**Revisado el 28 jul 2026.** La versión anterior de esta sección resolvía los preparados con una equivalencia que el dueño declaraba a ojo, sin registrar la producción. Diseño completo del reemplazo en `docs/backend/diseno-fabricacion.md`.
 
-La solución es una **equivalencia en el catálogo**, no un registro:
+Los preparados (quinua cocida, pollo deshilachado, filete, milanesa) **sí se registran cuando se hacen**, con un solo formulario para todos los casos:
 
-- El preparado existe como producto contable con su **receta de equivalencia**: "1000 g de salsa BBQ ≈ X g de tomate + Y g de azúcar + …". La define el dueño, versionada igual que las recetas.
-- El operario lo cuenta en el inventario como cualquier producto — a ciegas, como siempre.
-- La minería posterior convierte lo contado a crudos equivalentes y **acredita** esos crudos en la reconciliación. El medio batch de maracuyá deja de ser fuga fantasma.
-- Cero pantallas nuevas, cero pasos nuevos: es un producto más en el conteo + un cálculo del lado del análisis.
+```
+1. PESÁS lo que entra        →  1,240 kg de filete
+2. El sistema MUESTRA           mostaza 124 g · sal 12 g · panko 248 g
+   los extras ESCALADOS         harina 99 g · maicena 149 g · huevo 5
+3. CONTÁS lo que salió       →  14 milanesas
+```
 
-Ejemplo con números de la planilla: el conteo encuentra 1500 g de maracuyá procesado. Su equivalencia dice que 1000 g de pulpa ≈ 1450 g de fruta. La reconciliación acredita ~2175 g de maracuyá fruta al "real disponible" antes de comparar contra el teórico.
+- El preparado existe como producto contable (`products.is_manufactured`) y se cuenta en el inventario como cualquier otro.
+- El **default va en la entrada**, nunca en la salida: un default aceptable de un click en la salida fabricaría datos falsos, y las fugas fantasma vendrían con sello de confirmadas. La salida se cuenta — y no es trabajo nuevo, el operario ya cuenta las bolsitas para guardarlas.
+- Un batch confirmado sin contar queda marcado `unverified` y **no alimenta la calibración del rinde**.
+- La fabricación es contablemente **neutra**: el insumo se va del estante y vuelve como preparado. Igual que la equivalencia vieja — pero ahora el factor es un hecho registrado, no una estimación.
+
+**La equivalencia deja de declararse: se deriva.**
+
+```
+rinde(producto) = media de (output_qty / input_qty) sobre batches con unverified = false
+```
+
+Ejemplo real: se sancocha 1 kg de quinua y salen 22 bolsitas de 100 g. Ese cociente ya no lo estima nadie — sale de los batches. Y su **desviación estándar** alimenta el umbral de tolerancia por producto, que hoy es un 5% global inventado.
+
+El caso que antes no tenía respuesta: las lentejas. La socia dijo *"no lo sé, pero aprox como quinua porque aumenta"*. Con fabricación registrada, el primer batch da el número.
 
 ### F. Reconciliación teórico vs. real
 
@@ -179,11 +194,13 @@ discrepancia   =  stock teórico − conteo actual
 
 - La discrepancia se reporta **por producto**, en unidad natural y en plata (valuada por FIFO por partidas, la decisión revisada de v0.3: el faltante se valúa como ajuste de salida — partidas más viejas primero; el sobrante como ajuste de entrada al costo de la última partida).
 - El tablero del dueño muestra: discrepancia por producto del período, ranking de productos con mayor fuga en soles, y evolución entre conteos.
-- **El operario no ve nada de esto.** Sigue contando a ciegas — el principio #1 es exactamente lo que hace confiable al conteo que alimenta este cálculo.
+- **El operario no ve nada de esto** — ni el teórico, ni la discrepancia, ni el rinde acumulado. Dos fundamentos distintos, los dos vigentes: **anclaje** (si la pantalla de conteo muestra "el sistema espera 2.545 g", un operario honesto que contó 2.510 piensa "me habré equivocado" y escribe 2.545 — borra una fuga real de 35 g sin mala intención; el conteo es el único dato del sistema que no viene de una fórmula) y **anti-fraude** (el rinde con su desviación estándar es el umbral de detección: quien lo ve sabe cuánto puede sacar sin disparar la alerta).
 - Toda discrepancia es reconstruible: el dueño puede abrir un producto y ver los eventos que componen el teórico (conteo anterior, cada partida, cada pedido cuya receta usa ese insumo).
 
 > **DECISIÓN RESUELTA (PR #96) — umbral de tolerancia: 5% de default global, ajustable por producto.**
 > Ninguna cocina cuadra a cero: el umbral separa ruido normal (balanza, factores estimados) de "acá hay algo". El dueño puede ajustar el % por producto — el culantro merma distinto que los tenedores.
+>
+> **Revisión 28 jul 2026 — el umbral se alimenta de la varianza medida.** Con fabricación registrada (sección E), el rinde de cada preparado tiene desviación estándar observada. El 5% deja de ser una convención global y pasa a ser una propiedad medida por producto. El default global se mantiene solo para productos sin batches suficientes.
 
 ## Roles y permisos (revisión del dueño, 13 jul 2026)
 
@@ -253,7 +270,8 @@ La zona horaria es **configurable** vía `COCINA_BUSINESS_TIMEZONE` (default `Am
 
 Cada uno de estos ítems se convierte en un issue de GitHub cuando sea el momento. **No** entran a v0.4.
 
-- **Registro de fabricación / producción de intermedios.** Descartado deliberadamente (decisión del dueño, 13 jul 2026): las recetas se aplanan al crudo y los preparados se resuelven por equivalencia en el conteo. Si algún día el negocio necesita trazabilidad de batches (lotes, vencimientos), se reevalúa.
+- **Trazabilidad de lotes** (vencimientos, qué batch salió en qué pedido). El registro de fabricación entró al alcance el 28 jul 2026 (sección E), pero solo registra *cuánto* entró y salió — no persigue el lote físico. Si el negocio lo necesita, se reevalúa.
+- **Fabricación planificada** ("hay que hacer 3 batches de quinua"). Se registra lo que pasó, no lo que debería pasar.
 - **Rentabilidad por plato.** Con recetas + costos ya casi existe; falta solo el precio de venta por plato. Un paso corto, pero fuera de v0.4.
 - **Atribución de fuga por turno/operario.** La reconciliación de v0.4 es por producto y período. Cruzar discrepancias contra turnos es minería futura.
 - **Integración automática con Rappi / PedidosYa.** El detalle del pedido se completa a mano. Después se conectan las APIs.
@@ -306,13 +324,25 @@ Sirve para saber cuándo v0.4 está terminada. Incluye todo lo de v0.2 y v0.3 (q
 - [ ] El dueño puede definir y editar factores de conversión a gramos; cada cambio queda como registro nuevo y rige hacia adelante.
 - [ ] Los 5 platos existen como productos tipo "plato" y son los que el operario usa al completar pedidos — sin ningún cambio en su flujo.
 - [ ] El dueño puede definir la receta estimada de cada plato (insumos crudos + cantidades; packing según decisión); cada cambio crea una versión nueva sin recalcular teóricos pasados.
-- [ ] Los preparados existen como productos contables con receta de equivalencia definida por el dueño, sin ningún registro de producción.
-- [ ] **El operario no ve recetas, factores, equivalencias, teóricos ni discrepancias en ninguna ruta ni pantalla** — test automatizado obligatorio, mismo estándar que "no ve plata".
+- [ ] Los preparados existen como productos contables (`products.is_manufactured`) con su receta de fabricación definida por el dueño.
+- [ ] El operario registra una fabricación pesando la entrada, viendo los extras escalados a ese peso, y **contando la salida** — único campo obligatorio. El default va en la entrada, nunca en la salida.
+- [ ] Un batch confirmado sin contar queda `unverified` y no alimenta la calibración del rinde.
+- [ ] **El operario no ve costos ni plata en ninguna ruta ni pantalla** — test automatizado obligatorio (REGLA DE ORO).
+- [ ] **Ninguna pantalla de captura muestra teórico ni discrepancia, para ningún rol** — test automatizado obligatorio, con lista de claves prohibidas que incluye `expected_qty`, `theoretical`, `discrepancy`, `rinde`, `yield_factor`, `variance`, `stddev`.
+- [ ] **El rinde acumulado y su desviación estándar son visibles solo para el dueño** — test automatizado obligatorio. **El rinde con su σ ES el umbral de detección**: quien lo ve sabe exactamente cuánto puede sacar por batch sin disparar la alerta. Esto es anti-fraude, no anti-anclaje, y por eso no admite el carve-out de abajo.
+- [ ] El operario **sí** ve la receta de lo que está produciendo — es instrucción de trabajo, se la sabe de memoria porque la ejecuta.
+
+> **Historia de este criterio (28 jul 2026).** La versión original prohibía "recetas, factores, equivalencias, teóricos y discrepancias" en un solo bloque. El dueño la declaró sobre-amplia — con razón: esconderle la receta a quien la cocina no protege nada. Pero al desarmar el bloque, la primera reescritura se llevó de más dos cosas: dejó el **rinde** sin cobertura, y concedió ver la discrepancia *"después de confirmar el conteo"*.
+>
+> Lo segundo es el error más fino: el fundamento anti-anclaje justifica una restricción de **orden**, no una concesión de **acceso**. Mostrarle al cocinero la discrepancia del ciclo N le da el mapa de residuales para el ciclo N+1 ("la palta siempre sale +200 g, ahí hay margen"). Y hoy `api/dashboard.py` ya lo tiene cerrado con `require_role("owner")` — el criterio abría una puerta que el código tenía cerrada.
+>
+> Regla para la próxima vez: **un principio se escribe con su fundamento al lado**. Cuando el fundamento está explícito, el carve-out es obvio y no se lleva puesto lo que cubría otra amenaza.
 
 ### Nuevos en v0.4 — reconciliación
 
 - [ ] Tras cada conteo, el tablero muestra la discrepancia por producto (en unidad natural y en soles valuada por FIFO por partidas) del período entre conteos.
-- [ ] Los preparados contados se convierten por equivalencia y acreditan sus crudos en la reconciliación — un batch a medio usar no aparece como fuga.
+- [ ] Los preparados contados se convierten a crudos por el rinde **derivado de los batches** y acreditan esos crudos en la reconciliación — un batch a medio usar no aparece como fuga.
+- [ ] El cálculo de stock suma `manufacturing_batches.output_qty` y resta `manufacturing_batch_inputs.qty`. Sin eso, el preparado aparece como stock que creció sin entradas registradas.
 - [ ] El tablero rankea los productos por fuga en soles y marca en rojo los que superan el umbral definido (según decisión).
 - [ ] Toda discrepancia es trazable: el dueño puede abrir un producto y ver los eventos que componen su teórico en el período.
 
