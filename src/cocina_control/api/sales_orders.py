@@ -79,11 +79,22 @@ def get_menu(
     session: Session = Depends(get_session),
     _user: User = Depends(_CAN_TAKE_ORDERS),
 ) -> list[Product]:
-    """Productos vendibles CON precio cargado.
+    """Platos vendibles con precio cargado.
 
-    Los que no tienen sale_price quedan fuera a proposito. Mostrarlos llevaria al
-    asistente a ofrecer algo que despues no puede cotizar, y el cliente se entera
-    recien cuando ya eligio.
+    Quedan fuera dos grupos, por motivos distintos:
+
+    - Sin sale_price: ofrecer algo que despues no se puede cotizar le pasa el
+      problema al cliente cuando ya eligio.
+    - Con sale_price = 0: son modificadores, no platos. Las salsas van incluidas
+      ("1 salsa a eleccion") y llevan precio 0 porque una opcion que nombra un
+      producto exige que ese producto tenga precio; dejarlas en NULL las haria
+      irrepresentables como opcion. Pero listarlas en la carta le haria creer al
+      asistente que puede ofrecer "Vinagreta, S/ 0" como si fuera un plato.
+
+    Esto es un parche honesto sobre un hueco del modelo: products no distingue
+    plato de modificador, y "precio cero" es la unica senal disponible hoy. La
+    solucion de verdad es una marca explicita, y esta anotada como pendiente
+    junto con la de plato fijo vs armable.
     """
     return list(
         session.scalars(
@@ -92,6 +103,7 @@ def get_menu(
                 Product.is_active.is_(True),
                 Product.is_sale.is_(True),
                 Product.sale_price.is_not(None),
+                Product.sale_price > 0,
             )
             .order_by(Product.name)
         ).all()

@@ -391,3 +391,44 @@ async def test_la_carta_esconde_lo_que_no_puede_cotizar(
     nombres = {item["name"] for item in resp.json()}
     assert energy_bowl.name in nombres
     assert not any(n.startswith("BOWL MUDO") for n in nombres)
+
+
+@pytest.mark.anyio
+async def test_la_carta_no_lista_modificadores_gratis(
+    client: AsyncClient, bot_headers, db_session, owner_user, energy_bowl
+):
+    """Una salsa incluida vale 0 y NO es un plato.
+
+    Lleva precio 0 (y no NULL) porque una opcion que nombra un producto exige
+    que ese producto tenga precio. Pero en la carta seria "Vinagreta, S/ 0",
+    que el asistente ofreceria como si fuera un plato gratis.
+    """
+    salsa = _make_product(db_session, owner_user, f"VINAGRETA {uuid.uuid4().hex[:4]}", "0.00")
+    resp = await client.get(MENU_URL, headers=bot_headers)
+    assert resp.status_code == 200
+    nombres = {item["name"] for item in resp.json()}
+    assert energy_bowl.name in nombres
+    assert salsa.name not in nombres
+
+
+@pytest.mark.anyio
+async def test_la_salsa_gratis_igual_sirve_como_opcion(
+    client: AsyncClient, bot_headers, zona, energy_bowl, db_session, owner_user
+):
+    """Fuera de la carta, pero utilizable como modificador y sumando 0."""
+    salsa = _make_product(db_session, owner_user, f"SALSA PALTA {uuid.uuid4().hex[:4]}", "0.00")
+    payload = _order_payload(
+        energy_bowl.id,
+        quantity=1,
+        options=[
+            {
+                "option_group": "salsa",
+                "option_name": "Salsa de palta proteica",
+                "product_id": str(salsa.id),
+            }
+        ],
+    )
+    resp = await client.post(ORDERS_URL, json=payload, headers=bot_headers)
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["items_total"] == "33.00"
+    assert resp.json()["items"][0]["options"][0]["price_delta"] == "0.00"
