@@ -6,7 +6,11 @@ from sqlalchemy.orm import Mapped, mapped_column
 from cocina_control.db import Base
 from cocina_control.models.base import TimestampMixin
 
-_ROLE_ENUM = sa.Enum("cocinero", "owner", "admin", name="user_role", create_type=True)
+_ROLE_ENUM = sa.Enum(
+    "cocinero", "owner", "admin", "asistente_pedidos",
+    name="user_role",
+    create_type=True,
+)
 
 
 class User(Base, TimestampMixin):

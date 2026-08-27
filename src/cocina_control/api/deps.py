@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
-RoleName = Literal["cocinero", "owner", "admin"]
+RoleName = Literal["cocinero", "owner", "admin", "asistente_pedidos"]
 
 # Roles a service principal is allowed to impersonate.
 #
@@ -28,7 +28,14 @@ RoleName = Literal["cocinero", "owner", "admin"]
 # cost data (admin).  Keeping this at cocinero means a leaked service token
 # cannot reach the money side of the system.  Widening it is a code change
 # that goes through review — not a database edit someone makes at 2am.
-ACT_AS_ALLOWED_ROLES: frozenset[str] = frozenset({"cocinero"})
+#
+# asistente_pedidos (migracion 0020) es esa revision, y no relaja lo
+# anterior: es un rol nuevo y separado para que el bot de WhatsApp pueda
+# escribir pedidos con importes SIN que cada cocinero humano gane ese
+# acceso de rebote. Puede registrar un pago; no puede verificarlo, y eso
+# no depende de este archivo — lo sostiene ck_payments_verified_needs_human
+# en la base, que rechaza la fila aunque alguien afloje la validacion aca.
+ACT_AS_ALLOWED_ROLES: frozenset[str] = frozenset({"cocinero", "asistente_pedidos"})
 
 
 def get_current_user(

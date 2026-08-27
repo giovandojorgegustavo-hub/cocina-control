@@ -15,10 +15,12 @@ from cocina_control.api.auth import router as auth_router
 from cocina_control.api.dashboard import router as dashboard_router
 from cocina_control.api.deliveries import router as deliveries_router
 from cocina_control.api.delivery_orders import router as delivery_orders_router
+from cocina_control.api.delivery_zones import router as delivery_zones_router
 from cocina_control.api.health import router as health_router
 from cocina_control.api.inventory import router as inventory_router
 from cocina_control.api.products import router as products_router
 from cocina_control.api.purchase_orders import router as purchase_orders_router
+from cocina_control.api.sales_orders import router as sales_orders_router
 from cocina_control.api.suppliers import router as suppliers_router
 from cocina_control.config import get_settings
 
@@ -57,6 +59,8 @@ app.include_router(delivery_orders_router, prefix="/api/v1")
 app.include_router(inventory_router, prefix="/api/v1")
 app.include_router(dashboard_router, prefix="/api/v1")
 app.include_router(purchase_orders_router, prefix="/api/v1")
+app.include_router(delivery_zones_router, prefix="/api/v1")
+app.include_router(sales_orders_router, prefix="/api/v1")
 
 # ---------------------------------------------------------------------------
 # Test-only endpoints

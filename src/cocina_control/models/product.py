@@ -50,6 +50,14 @@ class Product(Base, TimestampMixin):
     # venta = item que sale en pedidos. Pueden ser ambos.
     is_purchase: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
     is_sale: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
+    # Precio de venta al cliente (migracion 0019). NULL-able porque un insumo
+    # (is_purchase) no se vende, y porque los productos de venta que ya existian
+    # entraron sin precio: cargarlos es del dueno, no de la migracion. La capa
+    # de servicio rechaza una linea de pedido cuyo producto no tiene precio; un
+    # pedido con total incompleto es peor que un pedido que no se pudo crear.
+    sale_price: Mapped[Decimal | None] = mapped_column(
+        sa.Numeric(10, 2), nullable=True
+    )
     created_by: Mapped[uuid.UUID] = mapped_column(
         sa.ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
