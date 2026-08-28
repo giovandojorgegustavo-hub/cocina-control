@@ -3,6 +3,7 @@
 from cocina_control.models.customer import Customer, CustomerAddress
 from cocina_control.models.delivery import Delivery, DeliveryItem
 from cocina_control.models.delivery_order import DeliveryOrder, DeliveryOrderItem
+from cocina_control.models.delivery_trip import DeliveryTrip
 from cocina_control.models.delivery_zone import DeliveryZone
 from cocina_control.models.inventory import InventoryCount, InventoryCountItem
 from cocina_control.models.payment import Payment
@@ -31,6 +32,7 @@ __all__ = [
     "DeliveryOrder",
     "DeliveryOrderItem",
     "DeliveryOrderItemIngredient",
+    "DeliveryTrip",
     "DeliveryZone",
     "InventoryCount",
     "InventoryCountItem",

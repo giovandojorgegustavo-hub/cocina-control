@@ -42,6 +42,7 @@ class SalesOrder(Base, TimestampMixin):
         sa.Index("ix_sales_orders_status", "status"),
         sa.Index("ix_sales_orders_customer_id", "customer_id"),
         sa.Index("ix_sales_orders_created_at", "created_at"),
+        sa.Index("ix_sales_orders_delivery_trip_id", "delivery_trip_id"),
         sa.CheckConstraint("items_total >= 0", name="ck_sales_orders_items_total_ok"),
         sa.CheckConstraint("delivery_fee >= 0", name="ck_sales_orders_fee_ok"),
         # El total no es un campo libre: es la suma, y la base lo verifica.
@@ -83,6 +84,11 @@ class SalesOrder(Base, TimestampMixin):
         sa.DateTime(timezone=True), nullable=True
     )
     notes: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    # Viaje de inDrive en el que salio. NULL mientras no se despacho. Varios
+    # pedidos pueden compartir viaje: pasa poco, pero pasa.
+    delivery_trip_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.ForeignKey("delivery_trips.id", ondelete="RESTRICT"), nullable=True
+    )
     # Id de conversacion del gateway. Sin esto, un pedido raro no se puede
     # rastrear hasta el chat que lo origino, que es el unico lugar donde esta lo
     # que el cliente realmente dijo.
