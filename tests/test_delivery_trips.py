@@ -47,18 +47,21 @@ def pedido(db_session: Session, owner_user) -> SalesOrder:
         sale_price=Decimal("33.00"), created_by=owner_user.id,
     )
     c = Customer(id=uuid.uuid4(), phone="+51900000009", name="Ana", created_by=owner_user.id)
-    db_session.add_all([p, c]); db_session.flush()
+    db_session.add_all([p, c])
+    db_session.flush()
     a = CustomerAddress(
         id=uuid.uuid4(), customer_id=c.id, district="Surco",
         address_line="Av 1", is_default=True, created_by=owner_user.id,
     )
-    db_session.add(a); db_session.flush()
+    db_session.add(a)
+    db_session.flush()
     o = SalesOrder(
         id=uuid.uuid4(), customer_id=c.id, address_id=a.id, channel="whatsapp",
         status="confirmed", items_total=Decimal("33.00"),
         delivery_fee=Decimal("10.00"), total=Decimal("43.00"), created_by=owner_user.id,
     )
-    db_session.add(o); db_session.flush()
+    db_session.add(o)
+    db_session.flush()
     return o
 
 
@@ -72,7 +75,8 @@ def indrive_falso(monkeypatch):
 
 
 def test_el_link_se_convierte_en_url_de_api():
-    """El link que ve una persona no devuelve JSON; el de la API sí."""
+    """El link que ve una persona no devuelve JSON
+    el de la API sí."""
     assert url_de_api(LINK) == (
         "https://sharetrip.indrive.com/proxy/share/api/v2/share/delivery/cust/abc123/tok456"
     )
@@ -132,7 +136,8 @@ async def test_el_mismo_link_no_se_registra_dos_veces(
         channel="whatsapp", status="confirmed", items_total=Decimal("28.00"),
         delivery_fee=Decimal("10.00"), total=Decimal("38.00"), created_by=owner_user.id,
     )
-    db_session.add(otro); db_session.flush()
+    db_session.add(otro)
+    db_session.flush()
 
     r = await client.post(
         URL, json={"tracking_url": LINK, "sales_order_ids": [str(otro.id)]},
@@ -168,7 +173,10 @@ async def test_un_link_que_no_es_de_indrive_se_rechaza(
 ):
     r = await client.post(
         URL,
-        json={"tracking_url": "https://algo-raro.com/rastreo/123", "sales_order_ids": [str(pedido.id)]},
+        json={
+            "tracking_url": "https://algo-raro.com/rastreo/123",
+            "sales_order_ids": [str(pedido.id)],
+        },
         headers=_auth(despachador_token),
     )
     assert r.status_code == 422
@@ -183,7 +191,8 @@ async def test_dos_pedidos_un_viaje_y_el_margen_queda_medible(
         channel="whatsapp", status="confirmed", items_total=Decimal("28.00"),
         delivery_fee=Decimal("10.00"), total=Decimal("38.00"), created_by=owner_user.id,
     )
-    db_session.add(otro); db_session.flush()
+    db_session.add(otro)
+    db_session.flush()
 
     r = await client.post(
         URL,
