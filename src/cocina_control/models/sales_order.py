@@ -45,10 +45,15 @@ class SalesOrder(Base, TimestampMixin):
         sa.Index("ix_sales_orders_delivery_trip_id", "delivery_trip_id"),
         sa.CheckConstraint("items_total >= 0", name="ck_sales_orders_items_total_ok"),
         sa.CheckConstraint("delivery_fee >= 0", name="ck_sales_orders_fee_ok"),
-        # El total no es un campo libre: es la suma, y la base lo verifica.
+        # El total no es un campo libre: es la cuenta, y la base la verifica.
         sa.CheckConstraint(
-            "total = items_total + delivery_fee",
+            "total = items_total - discount_amount + delivery_fee",
             name="ck_sales_orders_total_is_sum",
+        ),
+        # Un descuento mayor que los items es un error de cuenta, no una promo.
+        sa.CheckConstraint(
+            "discount_amount >= 0 AND discount_amount <= items_total",
+            name="ck_sales_orders_discount_ok",
         ),
         sa.CheckConstraint(
             "(cancelled_at IS NULL) = (cancelled_by IS NULL)",
@@ -79,6 +84,18 @@ class SalesOrder(Base, TimestampMixin):
     )
     items_total: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), nullable=False)
     delivery_fee: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), nullable=False)
+    # Descuento del pedido (migracion 0022), congelado igual que unit_price: si
+    # manana la promo baja al 10 %, lo cobrado ayer sigue diciendo 15. El
+    # codigo queda para saber POR QUE se desconto; el importe, para cuadrar.
+    discount_percent: Mapped[Decimal] = mapped_column(
+        sa.Numeric(5, 2), nullable=False, default=Decimal("0.00")
+    )
+    discount_amount: Mapped[Decimal] = mapped_column(
+        sa.Numeric(10, 2), nullable=False, default=Decimal("0.00")
+    )
+    promo_code: Mapped[str | None] = mapped_column(
+        sa.ForeignKey("promotions.code", ondelete="RESTRICT"), nullable=True
+    )
     total: Mapped[Decimal] = mapped_column(sa.Numeric(10, 2), nullable=False)
     scheduled_for: Mapped[datetime | None] = mapped_column(
         sa.DateTime(timezone=True), nullable=True

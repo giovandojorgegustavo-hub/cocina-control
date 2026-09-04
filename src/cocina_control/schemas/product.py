@@ -93,6 +93,30 @@ class ProductUpdate(BaseModel):
         return self
 
 
+class ProductPricingUpdate(BaseModel):
+    """Precio de lista y descuento de un producto de venta.
+
+    Va aparte de ProductUpdate a proposito: el precio lo tocan owner Y admin
+    desde la pantalla de precios, mientras que el PATCH generico sigue siendo
+    del owner. Cualquier subconjunto de campos; null borra el valor.
+    """
+
+    sale_price: Annotated[
+        Decimal | None,
+        Field(default=None, ge=0, max_digits=10, decimal_places=2),
+    ] = None
+    discount_percent: Annotated[
+        Decimal | None,
+        Field(default=None, ge=0, lt=100, max_digits=5, decimal_places=2),
+    ] = None
+
+    @model_validator(mode="after")
+    def at_least_one_field(self) -> "ProductPricingUpdate":
+        if not self.model_fields_set:
+            raise ValueError("at least one field must be provided")
+        return self
+
+
 # ---------------------------------------------------------------------------
 # Response schemas
 # ---------------------------------------------------------------------------
@@ -109,6 +133,8 @@ class ProductListItem(BaseModel):
     low_stock_threshold: Decimal | None
     is_purchase: bool
     is_sale: bool
+    sale_price: Decimal | None = None
+    discount_percent: Decimal | None = None
 
 
 class ProductResponse(BaseModel):
@@ -123,3 +149,5 @@ class ProductResponse(BaseModel):
     is_active: bool
     is_purchase: bool
     is_sale: bool
+    sale_price: Decimal | None = None
+    discount_percent: Decimal | None = None

@@ -5,6 +5,7 @@ Routes
 GET    /api/v1/products           — list active products (owner + operator)
 POST   /api/v1/products           — create product (owner only)
 PATCH  /api/v1/products/{id}      — update product (owner only)
+PATCH  /api/v1/products/{id}/pricing — sale price + discount (owner + admin)
 DELETE /api/v1/products/{id}      — soft-delete product (owner only)
 
 Invariants
@@ -17,6 +18,7 @@ Invariants
 
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -31,6 +33,7 @@ from cocina_control.models.user import User
 from cocina_control.schemas.product import (
     ProductCreate,
     ProductListItem,
+    ProductPricingUpdate,
     ProductResponse,
     ProductUpdate,
 )
@@ -39,6 +42,7 @@ router = APIRouter(prefix="/products", tags=["products"])
 
 # Constraint name that guards active-product name uniqueness (migration 0002).
 _NAME_UNIQUE_CONSTRAINT = "ix_products_name_active_unique"
+_CENTS = Decimal("0.01")
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +235,59 @@ def update_product(
             ) from exc
         raise
 
+    return product
+
+
+# ---------------------------------------------------------------------------
+# PATCH /products/{product_id}/pricing
+# ---------------------------------------------------------------------------
+
+
+@router.patch(
+    "/{product_id}/pricing",
+    response_model=ProductResponse,
+    summary="Update sale price and discount of a sale product",
+)
+def update_product_pricing(
+    product_id: uuid.UUID,
+    body: ProductPricingUpdate,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_any_role("owner", "admin")),
+) -> Product:
+    """Set sale_price and/or discount_percent.
+
+    - 400 if the product is not a sale product: an insumo has no list price.
+    - Only the fields present in the body change; an explicit null clears them.
+    - Records updated_by and updated_at like every other mutation.
+    """
+    product = _get_product_or_404(session, product_id)
+    if not product.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found",
+        )
+    if not product.is_sale:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Product '{product.name}' is not a sale product",
+        )
+
+    # Quantized on write so the response says what the column will say
+    # ("20.00", not "20"): the ORM object keeps the request's Decimal after flush.
+    if "sale_price" in body.model_fields_set:
+        product.sale_price = (
+            body.sale_price.quantize(_CENTS) if body.sale_price is not None else None
+        )
+    if "discount_percent" in body.model_fields_set:
+        product.discount_percent = (
+            body.discount_percent.quantize(_CENTS)
+            if body.discount_percent is not None
+            else None
+        )
+
+    product.updated_by = current_user.id
+    product.updated_at = _utcnow()
+    session.flush()
     return product
 
 

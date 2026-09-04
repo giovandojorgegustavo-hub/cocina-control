@@ -33,6 +33,12 @@ class Product(Base, TimestampMixin):
             "is_purchase OR is_sale",
             name="ck_products_purchase_or_sale",
         ),
+        # [0, 100): un descuento del 100 % es un regalo y se carga como precio
+        # 0, no como descuento. Mirrors migration 0022.
+        sa.CheckConstraint(
+            "discount_percent IS NULL OR (discount_percent >= 0 AND discount_percent < 100)",
+            name="ck_products_discount_percent_range",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -57,6 +63,12 @@ class Product(Base, TimestampMixin):
     # pedido con total incompleto es peor que un pedido que no se pudo crear.
     sale_price: Mapped[Decimal | None] = mapped_column(
         sa.Numeric(10, 2), nullable=True
+    )
+    # Descuento por plato (migracion 0022). NULL o 0 es "sin descuento". El
+    # precio final NO se guarda: se calcula en el servidor a partir de estos
+    # dos campos, asi cambiar el descuento no obliga a recalcular nada.
+    discount_percent: Mapped[Decimal | None] = mapped_column(
+        sa.Numeric(5, 2), nullable=True
     )
     created_by: Mapped[uuid.UUID] = mapped_column(
         sa.ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
