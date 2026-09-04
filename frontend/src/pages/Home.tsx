@@ -78,7 +78,7 @@ export function Home() {
         Main area: 3 (or 4) action buttons.
         Tablet landscape (md+): side by side, each filling available width, filling remaining height.
         Mobile: stacked vertically, each ~1/4 screen height.
-        owner/admin get NUEVA ORDEN and PRECIOS as extra buttons.
+        owner/admin get NUEVA ORDEN, PRECIOS and DISTRITOS as extra buttons.
       */}
       <main className="flex-1 flex flex-col md:flex-row gap-px bg-gray-300 overflow-hidden">
         <ActionButton title="ENTRADA" subtitle="(llegó una entrega)" to="/entradas" />
@@ -89,6 +89,9 @@ export function Home() {
         )}
         {canCreateOrders && (
           <ActionButton title="PRECIOS" subtitle="(carta y descuentos)" to="/precios" />
+        )}
+        {canCreateOrders && (
+          <ActionButton title="DISTRITOS" subtitle="(reparto y tarifas)" to="/zonas" />
         )}
       </main>
 

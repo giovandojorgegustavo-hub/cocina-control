@@ -131,6 +131,21 @@ export interface Promotion {
 }
 
 // ---------------------------------------------------------------------------
+// Delivery zones (distritos de reparto)
+// ---------------------------------------------------------------------------
+
+export interface DeliveryZone {
+  id: string
+  district: string
+  // Tarifa en soles, decimal como string igual que el resto de los importes.
+  fee: string
+  // Una zona apagada no existe para el asistente de WhatsApp; el panel la
+  // sigue viendo para poder volver a encenderla.
+  is_active: boolean
+  updated_at: string | null
+}
+
+// ---------------------------------------------------------------------------
 // Inventory counts
 // ---------------------------------------------------------------------------
 
