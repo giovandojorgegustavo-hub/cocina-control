@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { isAxiosError } from 'axios'
 import { useProducts } from '../lib/products'
 import {
@@ -286,6 +286,13 @@ export function Precios() {
           &lt;
         </button>
         <h1 className="text-lg font-bold uppercase tracking-wide">PRECIOS Y DESCUENTOS</h1>
+        {/* Los extras con precio se editan aparte: son por grupo, no por plato. */}
+        <Link
+          to="/opciones"
+          className="ml-auto min-h-[48px] px-3 flex items-center text-sm text-gray-300 underline whitespace-nowrap"
+        >
+          Extras y opciones →
+        </Link>
       </header>
 
       <main className="flex-1 px-4 py-6 space-y-8 overflow-y-auto pb-24">

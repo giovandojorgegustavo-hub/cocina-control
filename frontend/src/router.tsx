@@ -16,6 +16,7 @@ import { Tablero } from './pages/Tablero'
 import { Trazabilidad } from './pages/Trazabilidad'
 import { Precios } from './pages/Precios'
 import { Zonas } from './pages/Zonas'
+import { Opciones } from './pages/Opciones'
 import { RequireAuth, RequireRole, RequireAnyRole } from './lib/guards'
 
 // React Router requires basename WITHOUT trailing slash.
@@ -164,6 +165,16 @@ export const router = createBrowserRouter([
       <RequireAuth>
         <RequireAnyRole roles={['owner', 'admin']}>
           <Zonas />
+        </RequireAnyRole>
+      </RequireAuth>
+    ),
+  },
+  {
+    path: '/opciones',
+    element: (
+      <RequireAuth>
+        <RequireAnyRole roles={['owner', 'admin']}>
+          <Opciones />
         </RequireAnyRole>
       </RequireAuth>
     ),
