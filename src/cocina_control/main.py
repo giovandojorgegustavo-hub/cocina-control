@@ -19,6 +19,7 @@ from cocina_control.api.delivery_trips import router as delivery_trips_router
 from cocina_control.api.delivery_zones import router as delivery_zones_router
 from cocina_control.api.health import router as health_router
 from cocina_control.api.inventory import router as inventory_router
+from cocina_control.api.option_groups import router as option_groups_router
 from cocina_control.api.products import router as products_router
 from cocina_control.api.promotions import router as promotions_router
 from cocina_control.api.purchase_orders import router as purchase_orders_router
@@ -65,6 +66,7 @@ app.include_router(delivery_zones_router, prefix="/api/v1")
 app.include_router(delivery_trips_router, prefix="/api/v1")
 app.include_router(sales_orders_router, prefix="/api/v1")
 app.include_router(promotions_router, prefix="/api/v1")
+app.include_router(option_groups_router, prefix="/api/v1")
 
 # ---------------------------------------------------------------------------
 # Test-only endpoints

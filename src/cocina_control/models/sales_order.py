@@ -189,3 +189,12 @@ class SalesOrderItemOption(Base, TimestampMixin):
     price_delta: Mapped[Decimal] = mapped_column(
         sa.Numeric(10, 2), nullable=False, default=0
     )
+    # Enlace a la opcion del catalogo (migracion 0023) cuando el pedido llego
+    # con option_item_id. NULL en las opciones de texto libre ("sin cebolla")
+    # y en todo lo anterior a 0023. Es un enlace hacia atras, no una
+    # dependencia: option_group, option_name y price_delta ya quedaron
+    # congelados arriba, y SET NULL garantiza que borrar la opcion del
+    # catalogo no toque un pedido cobrado.
+    option_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.ForeignKey("option_items.id", ondelete="SET NULL"), nullable=True
+    )
