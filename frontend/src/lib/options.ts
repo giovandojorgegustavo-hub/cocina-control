@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from './api'
 import type { OptionGroup, OptionItem, ProductOptionGroupLink } from './types'
 
@@ -150,6 +150,20 @@ export function useProductOptionGroups(productId: string) {
     queryFn: () => fetchProductOptionGroups(productId),
     staleTime: 5 * 60 * 1000,
     networkMode: 'offlineFirst',
+  })
+}
+
+// La pantalla por plato necesita las asignaciones de toda la carta a la vez
+// (resumen en cada tarjeta y "este grupo se usa en N platos"). Misma clave
+// por producto que useProductOptionGroups, asi el PUT invalida las dos.
+export function useProductsOptionGroups(productIds: string[]) {
+  return useQueries({
+    queries: productIds.map((productId) => ({
+      queryKey: productGroupsKey(productId),
+      queryFn: () => fetchProductOptionGroups(productId),
+      staleTime: 5 * 60 * 1000,
+      networkMode: 'offlineFirst' as const,
+    })),
   })
 }
 
