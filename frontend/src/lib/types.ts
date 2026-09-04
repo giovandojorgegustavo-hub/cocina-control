@@ -146,6 +146,43 @@ export interface DeliveryZone {
 }
 
 // ---------------------------------------------------------------------------
+// Extras y opciones de plato (migracion 0023)
+// ---------------------------------------------------------------------------
+
+export type SelectionMode = 'single' | 'multiple'
+
+export interface OptionItem {
+  id: string
+  name: string
+  // Lo que suma al plato, en soles; "0.00" es incluido.
+  price: string
+  // Producto del catalogo cuando la opcion ES ese producto (una bebida).
+  product_id: string | null
+  sort_order: number
+  is_active: boolean
+}
+
+export interface OptionGroup {
+  id: string
+  name: string
+  selection: SelectionMode
+  required: boolean
+  min_choices: number
+  max_choices: number | null
+  sort_order: number
+  is_active: boolean
+  updated_at: string | null
+  items: OptionItem[]
+}
+
+/** GET/PUT /products/{id}/option-groups — un grupo asignado a un plato. */
+export interface ProductOptionGroupLink {
+  group_id: string
+  name: string
+  sort_order: number
+}
+
+// ---------------------------------------------------------------------------
 // Inventory counts
 // ---------------------------------------------------------------------------
 

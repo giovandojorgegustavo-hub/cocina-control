@@ -20,7 +20,9 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from cocina_control.schemas.option_group import MenuOptionGroupResponse
 
 
 class SalesOrderChannel(StrEnum):
@@ -92,14 +94,33 @@ class AddressIn(BaseModel):
 class SalesOrderItemOptionIn(BaseModel):
     """Modificador de una linea: crema, proteina extra, "sin palta".
 
-    price_delta NO viaja: si la opcion nombra un producto del catalogo, su
-    importe sale de products.sale_price; si no lo nombra, es una preferencia y
-    no cuesta nada.
+    Dos formas, y el bot puede mezclarlas en el mismo item:
+
+    - Estructurada: {option_item_id}. La opcion existe en el catalogo de
+      opciones (migracion 0023); el servidor copia el nombre del grupo, el de
+      la opcion y el precio desde ahi, y verifica que el grupo este asignado
+      al plato y que se respeten sus reglas (una sola, hasta N, obligatorio).
+    - Libre: {option_group, option_name, product_id?}. Una preferencia
+      ("sin cebolla") o el camino anterior a 0023. Si nombra un producto, su
+      importe sale de products.sale_price; si no, no cuesta nada.
+
+    price_delta NO viaja en ninguna de las dos.
     """
 
-    option_group: Annotated[str, Field(min_length=1, max_length=60)]
-    option_name: Annotated[str, Field(min_length=1, max_length=120)]
+    option_item_id: uuid.UUID | None = None
+    option_group: Annotated[str | None, Field(default=None, min_length=1, max_length=60)] = None
+    option_name: Annotated[str | None, Field(default=None, min_length=1, max_length=120)] = None
     product_id: uuid.UUID | None = None
+
+    @model_validator(mode="after")
+    def one_shape_or_the_other(self) -> "SalesOrderItemOptionIn":
+        if self.option_item_id is not None:
+            return self
+        if self.option_group is None or self.option_name is None:
+            raise ValueError(
+                "an option needs either option_item_id or option_group + option_name"
+            )
+        return self
 
 
 class SalesOrderItemIn(BaseModel):
@@ -155,6 +176,9 @@ class MenuItemResponse(BaseModel):
     sale_price: Decimal
     discount_percent: Decimal
     final_price: Decimal
+    # Grupos de opciones activos asignados al plato (migracion 0023), en el
+    # orden en que se le preguntan al cliente. Vacio si el plato no lleva.
+    option_groups: list[MenuOptionGroupResponse] = Field(default_factory=list)
 
 
 class SalesOrderItemOptionResponse(BaseModel):
@@ -163,6 +187,8 @@ class SalesOrderItemOptionResponse(BaseModel):
     option_group: str
     option_name: str
     price_delta: Decimal
+    # NULL en las opciones libres y en todo lo anterior a 0023.
+    option_item_id: uuid.UUID | None = None
 
 
 class SalesOrderItemResponse(BaseModel):

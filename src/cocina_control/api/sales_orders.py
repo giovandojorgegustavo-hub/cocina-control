@@ -17,6 +17,10 @@ Invariants
 - Un descuento tampoco es un importe que viaje: es un codigo (promo_code) que
   el servidor valida contra promotions, o un discount_percent que vive en el
   producto. El bot solo dice que el cliente lo pidio.
+- Una opcion con precio tampoco: viaja option_item_id y el servidor copia el
+  nombre y el precio desde option_items (migracion 0023), verificando que el
+  grupo este asignado al plato y que se respeten sus reglas. El texto libre
+  ({option_group, option_name}) sigue entrando para preferencias sin costo.
 - Un pago nace pending y solo un humano con rol owner/admin puede verificarlo.
   La regla la sostiene ck_payments_verified_needs_human en la base, no este
   archivo.
@@ -25,6 +29,7 @@ Invariants
 """
 
 import uuid
+from collections import defaultdict
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Annotated
@@ -35,8 +40,10 @@ from sqlalchemy.orm import Session
 
 from cocina_control.api.delivery_zones import find_zone
 from cocina_control.api.deps import require_any_role
+from cocina_control.api.option_groups import load_assigned_groups, menu_option_groups
 from cocina_control.db import get_session
 from cocina_control.models.customer import Customer, CustomerAddress
+from cocina_control.models.option_group import SELECTION_SINGLE, OptionItem
 from cocina_control.models.payment import Payment
 from cocina_control.models.product import Product
 from cocina_control.models.promotion import Promotion
@@ -52,6 +59,7 @@ from cocina_control.schemas.sales_order import (
     PaymentReject,
     PaymentResponse,
     SalesOrderCreate,
+    SalesOrderItemOptionIn,
     SalesOrderItemOptionResponse,
     SalesOrderItemResponse,
     SalesOrderResponse,
@@ -128,6 +136,9 @@ def get_menu(
         )
         .order_by(Product.name)
     ).all()
+    # Una sola pasada por las tres tablas de opciones para toda la carta: el
+    # asistente pide el menu en cada conversacion.
+    option_groups = menu_option_groups(session, [p.id for p in products])
     return [
         MenuItemResponse(
             id=p.id,
@@ -135,6 +146,7 @@ def get_menu(
             sale_price=_money(Decimal(p.sale_price)),
             discount_percent=_discount_percent(p),
             final_price=_final_price(p),
+            option_groups=option_groups.get(p.id, []),
         )
         for p in products
     ]
@@ -257,6 +269,95 @@ def _resolve_promotion(
     return promotion
 
 
+def _bad_request(detail: str) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+
+
+def _build_options(
+    session: Session, product: Product, options_in: list[SalesOrderItemOptionIn]
+) -> tuple[list[SalesOrderItemOption], Decimal]:
+    """Convierte las opciones del request en filas congeladas y suma sus extras.
+
+    Dos caminos por opcion, y pueden convivir en el mismo item:
+
+    - option_item_id (estructurado): la opcion tiene que estar activa y su
+      grupo asignado al plato; el nombre del grupo, el de la opcion y el precio
+      se copian desde el catalogo de opciones. El precio es el de la opcion
+      aunque enlace un producto: lo que cuesta un adicional dentro de un bowl
+      lo decide el grupo.
+    - option_group + option_name (libre): preferencia sin costo, o un producto
+      del catalogo con su precio. Es el camino anterior a 0023 y sigue entero.
+
+    Las reglas de grupo (una sola, hasta N) se cuentan sobre las opciones
+    estructuradas del item. Los grupos obligatorios se exigen SOLO cuando el
+    item trae al menos un option_item_id: un pedido que llega todo en texto
+    libre es el bot viejo, y no se le puede pedir que conozca grupos que no
+    sabe nombrar. Los mensajes son contrato con el asistente, que los repite al
+    cliente tal cual.
+    """
+    structured = [o for o in options_in if o.option_item_id is not None]
+    assigned = load_assigned_groups(session, [product.id]).get(product.id, []) if structured else []
+    groups_by_id = {group.id: group for group in assigned}
+    chosen: dict[uuid.UUID, int] = defaultdict(int)
+
+    options: list[SalesOrderItemOption] = []
+    extras = Decimal("0.00")
+    for option_in in options_in:
+        if option_in.option_item_id is not None:
+            item = session.get(OptionItem, option_in.option_item_id)
+            if item is None or not item.is_active or item.group_id not in groups_by_id:
+                raise _bad_request("La opción no corresponde a este plato.")
+            group = groups_by_id[item.group_id]
+            chosen[group.id] += 1
+            limit = 1 if group.selection == SELECTION_SINGLE else group.max_choices
+            if limit is not None and chosen[group.id] > limit:
+                raise _bad_request(f"Elige como máximo {limit} en {group.name}.")
+            delta = _money(Decimal(item.price))
+            options.append(
+                SalesOrderItemOption(
+                    id=uuid.uuid4(),
+                    order_item_id=None,  # se asigna tras el flush del item
+                    product_id=item.product_id,
+                    option_group=group.name,
+                    option_name=item.name,
+                    price_delta=delta,
+                    option_item_id=item.id,
+                )
+            )
+        else:
+            if option_in.product_id is None:
+                # Preferencia sin costo ("sin palta", "poco picante").
+                delta = Decimal("0.00")
+            else:
+                option_product = _load_sale_product(session, option_in.product_id)
+                delta = _final_price(option_product)
+            options.append(
+                SalesOrderItemOption(
+                    id=uuid.uuid4(),
+                    order_item_id=None,
+                    product_id=option_in.product_id,
+                    option_group=option_in.option_group,
+                    option_name=option_in.option_name,
+                    price_delta=delta,
+                    option_item_id=None,
+                )
+            )
+        extras += delta
+
+    if structured:
+        for group in assigned:
+            if not group.required:
+                continue
+            minimum = max(group.min_choices, 1)
+            count = chosen.get(group.id, 0)
+            if count == 0:
+                raise _bad_request(f"Falta elegir en {group.name}.")
+            if count < minimum:
+                raise _bad_request(f"Elige al menos {minimum} en {group.name}.")
+
+    return options, extras
+
+
 # ---------------------------------------------------------------------------
 # Pedido
 # ---------------------------------------------------------------------------
@@ -311,26 +412,7 @@ def create_sales_order(
         product = _load_sale_product(session, item_in.product_id)
         unit_price = _final_price(product)
 
-        options: list[SalesOrderItemOption] = []
-        extras = Decimal("0.00")
-        for option_in in item_in.options:
-            if option_in.product_id is None:
-                # Preferencia sin costo ("sin palta", "poco picante").
-                delta = Decimal("0.00")
-            else:
-                option_product = _load_sale_product(session, option_in.product_id)
-                delta = _final_price(option_product)
-            extras += delta
-            options.append(
-                SalesOrderItemOption(
-                    id=uuid.uuid4(),
-                    order_item_id=None,  # se asigna abajo, tras el flush del item
-                    product_id=option_in.product_id,
-                    option_group=option_in.option_group,
-                    option_name=option_in.option_name,
-                    price_delta=delta,
-                )
-            )
+        options, extras = _build_options(session, product, item_in.options)
 
         line_total = _money((unit_price + extras) * item_in.quantity)
         items_total += line_total
@@ -399,6 +481,7 @@ def _order_response(session: Session, order: SalesOrder) -> SalesOrderResponse:
                         option_group=o.option_group,
                         option_name=o.option_name,
                         price_delta=o.price_delta,
+                        option_item_id=o.option_item_id,
                     )
                     for o in options
                 ],

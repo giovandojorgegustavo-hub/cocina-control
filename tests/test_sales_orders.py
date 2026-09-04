@@ -20,6 +20,7 @@ from httpx import AsyncClient
 from sqlalchemy.orm import Session
 
 from cocina_control.models.delivery_zone import DeliveryZone
+from cocina_control.models.option_group import OptionGroup, OptionItem, ProductOptionGroup
 from cocina_control.models.payment import Payment
 from cocina_control.models.product import Product
 
@@ -432,3 +433,77 @@ async def test_la_salsa_gratis_igual_sirve_como_opcion(
     assert resp.status_code == 201, resp.text
     assert resp.json()["items_total"] == "33.00"
     assert resp.json()["items"][0]["options"][0]["price_delta"] == "0.00"
+
+
+# ---------------------------------------------------------------------------
+# Opciones estructuradas (migracion 0023): el precio lo dice el grupo
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_la_opcion_del_catalogo_suma_su_precio(
+    client: AsyncClient, bot_headers, zona, db_session, owner_user, energy_bowl
+):
+    """Filete de pollo +8 segun el grupo: unit_price + 8, y el enlace queda."""
+    group = OptionGroup(
+        id=uuid.uuid4(),
+        name=f"Proteína extra {uuid.uuid4().hex[:4]}",
+        selection="multiple",
+        required=True,
+        min_choices=1,
+        max_choices=2,
+        created_by=owner_user.id,
+    )
+    db_session.add(group)
+    db_session.flush()
+    pollo = OptionItem(
+        id=uuid.uuid4(), group_id=group.id, name="Filete de pollo", price=Decimal("8.00")
+    )
+    db_session.add(pollo)
+    db_session.add(ProductOptionGroup(product_id=energy_bowl.id, group_id=group.id))
+    db_session.flush()
+
+    payload = _order_payload(
+        energy_bowl.id, quantity=1, options=[{"option_item_id": str(pollo.id)}]
+    )
+    resp = await client.post(ORDERS_URL, json=payload, headers=bot_headers)
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["items"][0]["unit_price"] == "33.00"
+    assert body["items"][0]["line_total"] == "41.00"
+    assert body["items_total"] == "41.00"
+    (option,) = body["items"][0]["options"]
+    assert option["option_item_id"] == str(pollo.id)
+    assert option["option_group"] == group.name
+    assert option["price_delta"] == "8.00"
+
+    # Lo que la carta ofrece es lo mismo que el pedido cobro.
+    resp = await client.get(MENU_URL, headers=bot_headers)
+    item = next(i for i in resp.json() if i["id"] == str(energy_bowl.id))
+    assert item["option_groups"][0]["options"] == [
+        {"id": str(pollo.id), "name": "Filete de pollo", "price": "8.00"}
+    ]
+
+
+@pytest.mark.anyio
+async def test_la_opcion_legada_sigue_igual_junto_a_la_nueva(
+    client: AsyncClient, bot_headers, zona, energy_bowl, pollo_extra
+):
+    """El bot viejo manda {option_group, option_name, product_id} y no cambia nada."""
+    payload = _order_payload(
+        energy_bowl.id,
+        quantity=1,
+        options=[
+            {
+                "option_group": "proteina-extra",
+                "option_name": "Filete de pollo",
+                "product_id": str(pollo_extra.id),
+            }
+        ],
+    )
+    resp = await client.post(ORDERS_URL, json=payload, headers=bot_headers)
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["items_total"] == "40.00"
+    (option,) = resp.json()["items"][0]["options"]
+    assert option["option_item_id"] is None
+    assert option["price_delta"] == "7.00"
