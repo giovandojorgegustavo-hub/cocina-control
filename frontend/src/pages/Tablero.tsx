@@ -478,6 +478,12 @@ export function Tablero() {
           >
             precios
           </Link>
+          <Link
+            to="/zonas"
+            className="min-h-[48px] px-4 flex items-center justify-center border border-white text-white text-sm font-bold uppercase tracking-wide active:opacity-70"
+          >
+            distritos
+          </Link>
           <button
             onClick={handleLogout}
             className="min-h-[48px] min-w-[48px] px-4 text-sm text-gray-300 underline"
