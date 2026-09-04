@@ -2,7 +2,7 @@
 
 Routes
 ------
-GET  /api/v1/catalog/menu                  — carta con precios
+GET  /api/v1/catalog/menu                  — carta con precios (lista y final)
 POST /api/v1/sales-orders                  — crear pedido (asistente/owner/admin)
 GET  /api/v1/sales-orders                  — bandeja, filtrable por estado
 GET  /api/v1/sales-orders/{id}             — detalle
@@ -14,6 +14,9 @@ Invariants
 ----------
 - El cliente NUNCA manda importes. Todo precio sale de products.sale_price y de
   delivery_zones, y la cuenta la hace el servidor. Ver schemas/sales_order.py.
+- Un descuento tampoco es un importe que viaje: es un codigo (promo_code) que
+  el servidor valida contra promotions, o un discount_percent que vive en el
+  producto. El bot solo dice que el cliente lo pidio.
 - Un pago nace pending y solo un humano con rol owner/admin puede verificarlo.
   La regla la sostiene ck_payments_verified_needs_human en la base, no este
   archivo.
@@ -27,7 +30,7 @@ from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from cocina_control.api.delivery_zones import find_zone
@@ -36,6 +39,7 @@ from cocina_control.db import get_session
 from cocina_control.models.customer import Customer, CustomerAddress
 from cocina_control.models.payment import Payment
 from cocina_control.models.product import Product
+from cocina_control.models.promotion import Promotion
 from cocina_control.models.sales_order import (
     SalesOrder,
     SalesOrderItem,
@@ -69,6 +73,24 @@ def _money(value: Decimal) -> Decimal:
     return value.quantize(_CENTS)
 
 
+def _discount_percent(product: Product) -> Decimal:
+    """NULL y 0 significan lo mismo: sin descuento."""
+    return _money(Decimal(product.discount_percent or 0))
+
+
+def _final_price(product: Product) -> Decimal:
+    """Precio que se cobra: lista menos el descuento del plato, a centavos.
+
+    Se calcula y no se guarda: cambiar el descuento no obliga a recalcular
+    nada, y lo cobrado en cada pedido ya queda congelado en unit_price.
+    """
+    list_price = _money(Decimal(product.sale_price))
+    percent = _discount_percent(product)
+    if percent <= 0:
+        return list_price
+    return _money(list_price * (1 - percent / 100))
+
+
 # ---------------------------------------------------------------------------
 # Carta
 # ---------------------------------------------------------------------------
@@ -78,7 +100,7 @@ def _money(value: Decimal) -> Decimal:
 def get_menu(
     session: Session = Depends(get_session),
     _user: User = Depends(_CAN_TAKE_ORDERS),
-) -> list[Product]:
+) -> list[MenuItemResponse]:
     """Platos vendibles con precio cargado.
 
     Quedan fuera dos grupos, por motivos distintos:
@@ -96,18 +118,26 @@ def get_menu(
     solucion de verdad es una marca explicita, y esta anotada como pendiente
     junto con la de plato fijo vs armable.
     """
-    return list(
-        session.scalars(
-            select(Product)
-            .where(
-                Product.is_active.is_(True),
-                Product.is_sale.is_(True),
-                Product.sale_price.is_not(None),
-                Product.sale_price > 0,
-            )
-            .order_by(Product.name)
-        ).all()
-    )
+    products = session.scalars(
+        select(Product)
+        .where(
+            Product.is_active.is_(True),
+            Product.is_sale.is_(True),
+            Product.sale_price.is_not(None),
+            Product.sale_price > 0,
+        )
+        .order_by(Product.name)
+    ).all()
+    return [
+        MenuItemResponse(
+            id=p.id,
+            name=p.name,
+            sale_price=_money(Decimal(p.sale_price)),
+            discount_percent=_discount_percent(p),
+            final_price=_final_price(p),
+        )
+        for p in products
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +219,44 @@ def _load_sale_product(session: Session, product_id: uuid.UUID) -> Product:
     return product
 
 
+def _resolve_promotion(
+    session: Session, code: str | None, customer: Customer
+) -> Promotion | None:
+    """Valida el codigo que mando el bot. Los textos de error son contrato:
+    el asistente los reconoce para explicarle al cliente que paso."""
+    if code is None:
+        return None
+    promotion = session.get(Promotion, code)
+    if promotion is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Promoción no encontrada.",
+        )
+    if not promotion.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Promoción no vigente.",
+        )
+    if promotion.first_order_only:
+        # El cliente ya esta upserteado y el pedido nuevo todavia no: la
+        # cuenta es exactamente "los pedidos anteriores de este telefono".
+        # Un pedido cancelado no cuenta como compra.
+        previous = session.scalar(
+            select(func.count())
+            .select_from(SalesOrder)
+            .where(
+                SalesOrder.customer_id == customer.id,
+                SalesOrder.status != "cancelled",
+            )
+        )
+        if previous:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El descuento de primera compra ya fue usado por este cliente.",
+            )
+    return promotion
+
+
 # ---------------------------------------------------------------------------
 # Pedido
 # ---------------------------------------------------------------------------
@@ -213,6 +281,9 @@ def create_sales_order(
 
     customer = _upsert_customer(session, payload.customer, actor)
     address = _resolve_address(session, customer, payload.address, actor)
+    # Antes de session.add(order): la promo de primera compra cuenta los
+    # pedidos previos del cliente, y este todavia no tiene que estar.
+    promotion = _resolve_promotion(session, payload.promo_code, customer)
 
     order = SalesOrder(
         id=uuid.uuid4(),
@@ -221,6 +292,9 @@ def create_sales_order(
         channel=payload.channel.value,
         status="confirmed",
         items_total=Decimal("0.00"),
+        discount_percent=Decimal("0.00"),
+        discount_amount=Decimal("0.00"),
+        promo_code=promotion.code if promotion else None,
         delivery_fee=_money(zone.fee),
         total=_money(zone.fee),
         notes=payload.notes,
@@ -235,7 +309,7 @@ def create_sales_order(
 
     for item_in in payload.items:
         product = _load_sale_product(session, item_in.product_id)
-        unit_price = _money(Decimal(product.sale_price))
+        unit_price = _final_price(product)
 
         options: list[SalesOrderItemOption] = []
         extras = Decimal("0.00")
@@ -245,7 +319,7 @@ def create_sales_order(
                 delta = Decimal("0.00")
             else:
                 option_product = _load_sale_product(session, option_in.product_id)
-                delta = _money(Decimal(option_product.sale_price))
+                delta = _final_price(option_product)
             extras += delta
             options.append(
                 SalesOrderItemOption(
@@ -280,7 +354,10 @@ def create_sales_order(
             session.add(option)
 
     order.items_total = _money(items_total)
-    order.total = _money(items_total + order.delivery_fee)
+    if promotion is not None:
+        order.discount_percent = _money(Decimal(promotion.percent))
+        order.discount_amount = _money(order.items_total * order.discount_percent / 100)
+    order.total = _money(order.items_total - order.discount_amount + order.delivery_fee)
     session.commit()
     session.refresh(order)
 
@@ -338,6 +415,9 @@ def _order_response(session: Session, order: SalesOrder) -> SalesOrderResponse:
         address_line=address.address_line if address else "",
         reference=address.reference if address else None,
         items_total=order.items_total,
+        discount_percent=order.discount_percent,
+        discount_amount=order.discount_amount,
+        promo_code=order.promo_code,
         delivery_fee=order.delivery_fee,
         total=order.total,
         notes=order.notes,

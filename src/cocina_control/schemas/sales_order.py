@@ -8,6 +8,10 @@ viajara en el request, quien tenga el token del asistente podria crear un pedido
 de dos bowls por S/ 1 y la base lo aceptaria feliz: todos los CHECK cuadran,
 porque 1 = 1 + 0. El unico modo de que el total sea confiable es que el cliente
 no participe en calcularlo.
+
+Un descuento tampoco viaja como importe. Lo que viaja es promo_code, un texto
+que el servidor valida contra promotions y convierte en porcentaje. El bot dice
+QUE el cliente pidio el descuento; cuanto vale lo decide la base.
 """
 
 import uuid
@@ -112,6 +116,8 @@ class SalesOrderCreate(BaseModel):
     channel: SalesOrderChannel = SalesOrderChannel.whatsapp
     notes: Annotated[str | None, Field(default=None, max_length=1000)]
     conversation_ref: Annotated[str | None, Field(default=None, max_length=120)]
+    # Codigo de promotions, nunca un importe. Ver la regla al inicio del archivo.
+    promo_code: Annotated[str | None, Field(default=None, min_length=1, max_length=40)]
 
 
 class PaymentCreate(BaseModel):
@@ -136,11 +142,19 @@ class PaymentReject(BaseModel):
 
 
 class MenuItemResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    """Un plato de la carta con su precio de lista y el que se cobra.
+
+    sale_price es el precio de lista; final_price ya tiene aplicado
+    discount_percent. El asistente muestra los dos cuando hay descuento y
+    cobra final_price — pero no lo manda: el servidor lo recalcula al crear
+    el pedido.
+    """
 
     id: uuid.UUID
     name: str
     sale_price: Decimal
+    discount_percent: Decimal
+    final_price: Decimal
 
 
 class SalesOrderItemOptionResponse(BaseModel):
@@ -190,6 +204,9 @@ class SalesOrderResponse(BaseModel):
     address_line: str
     reference: str | None = None
     items_total: Decimal
+    discount_percent: Decimal
+    discount_amount: Decimal
+    promo_code: str | None = None
     delivery_fee: Decimal
     total: Decimal
     notes: str | None = None

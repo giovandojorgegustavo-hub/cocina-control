@@ -8,6 +8,7 @@ from cocina_control.models.delivery_zone import DeliveryZone
 from cocina_control.models.inventory import InventoryCount, InventoryCountItem
 from cocina_control.models.payment import Payment
 from cocina_control.models.product import Product
+from cocina_control.models.promotion import Promotion
 from cocina_control.models.purchase_order import (
     PurchaseOrder,
     PurchaseOrderItem,
@@ -38,6 +39,7 @@ __all__ = [
     "InventoryCountItem",
     "Payment",
     "Product",
+    "Promotion",
     "ProductRecipe",
     "PurchaseOrder",
     "PurchaseOrderItem",
