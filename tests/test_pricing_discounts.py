@@ -456,3 +456,77 @@ async def test_promo_desconocida_da_404(client: AsyncClient, owner_token):
         f"{PROMOS_URL}/no_existe", json={"percent": "5"}, headers=_auth(owner_token)
     )
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Monto a pagar por Yape: el envio no entra, lo cobra el motorizado
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def zona_siete(db_session: Session, owner_user) -> DeliveryZone:
+    """Otra zona, con tarifa distinta de la de `zona`, para que la cuenta no
+    pase de casualidad: 7 no es 5 y el distrito es unico en minusculas."""
+    zone = DeliveryZone(
+        id=uuid.uuid4(),
+        district="Jesus Maria",
+        fee=Decimal("7.00"),
+        is_active=True,
+        created_by=owner_user.id,
+    )
+    db_session.add(zone)
+    db_session.flush()
+    return zone
+
+
+@pytest.mark.anyio
+async def test_el_monto_a_pagar_no_incluye_el_envio(
+    client: AsyncClient, bot_headers, zona_siete, energy_bowl
+):
+    payload = _order_payload(energy_bowl.id, district="Jesus Maria", quantity=1)
+    resp = await client.post(ORDERS_URL, json=payload, headers=bot_headers)
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    # 33 de productos; el envio (7) lo cobra el motorizado, pero sigue en total.
+    assert body["items_total"] == "33.00"
+    assert body["delivery_fee"] == "7.00"
+    assert body["amount_due"] == "33.00"
+    assert body["total"] == "40.00"
+    assert body["delivery_fee_payment"] == "on_arrival"
+
+
+@pytest.mark.anyio
+async def test_el_monto_a_pagar_descuenta_la_promo_pero_no_el_envio(
+    client: AsyncClient, bot_headers, zona_siete, energy_bowl, primera_compra
+):
+    phone = f"+5199{uuid.uuid4().int % 10**7:07d}"
+    payload = _payload_con_promo(energy_bowl.id, phone=phone, district="Jesus Maria", quantity=1)
+    resp = await client.post(ORDERS_URL, json=payload, headers=bot_headers)
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    # 33 - 15 % (4.95) = 28.05 por Yape; 28.05 + 7 = 35.05 de valor del pedido.
+    assert body["discount_amount"] == "4.95"
+    assert body["amount_due"] == "28.05"
+    assert body["total"] == "35.05"
+    assert body["delivery_fee_payment"] == "on_arrival"
+
+
+@pytest.mark.anyio
+async def test_la_bandeja_y_el_detalle_traen_el_monto_a_pagar(
+    client: AsyncClient, bot_headers, zona_siete, energy_bowl
+):
+    payload = _order_payload(energy_bowl.id, district="Jesus Maria", quantity=1)
+    created = await client.post(ORDERS_URL, json=payload, headers=bot_headers)
+    assert created.status_code == 201, created.text
+    order_id = created.json()["id"]
+
+    detail = await client.get(f"{ORDERS_URL}/{order_id}", headers=bot_headers)
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["amount_due"] == "33.00"
+    assert detail.json()["delivery_fee_payment"] == "on_arrival"
+
+    listed = await client.get(ORDERS_URL, headers=bot_headers)
+    assert listed.status_code == 200, listed.text
+    row = next(o for o in listed.json() if o["id"] == order_id)
+    assert row["amount_due"] == "33.00"
+    assert row["delivery_fee_payment"] == "on_arrival"
