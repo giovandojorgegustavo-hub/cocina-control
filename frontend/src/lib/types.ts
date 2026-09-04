@@ -111,6 +111,23 @@ export interface Product {
   // Flags independientes (issue #140): compra = insumo, venta = item de pedido.
   is_purchase: boolean
   is_sale: boolean
+  // Precio de lista y descuento por plato (migracion 0022). Decimales como
+  // string, igual que el resto de los importes de la API. null = sin cargar.
+  sale_price: string | null
+  discount_percent: string | null
+}
+
+// ---------------------------------------------------------------------------
+// Promotions
+// ---------------------------------------------------------------------------
+
+export interface Promotion {
+  code: string
+  name: string
+  percent: string
+  first_order_only: boolean
+  is_active: boolean
+  updated_at: string | null
 }
 
 // ---------------------------------------------------------------------------

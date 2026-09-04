@@ -14,6 +14,7 @@ import { ContarProducto } from './pages/ContarProducto'
 import { InventarioCompletado } from './pages/InventarioCompletado'
 import { Tablero } from './pages/Tablero'
 import { Trazabilidad } from './pages/Trazabilidad'
+import { Precios } from './pages/Precios'
 import { RequireAuth, RequireRole, RequireAnyRole } from './lib/guards'
 
 // React Router requires basename WITHOUT trailing slash.
@@ -142,6 +143,16 @@ export const router = createBrowserRouter([
       <RequireAuth>
         <RequireAnyRole roles={['cocinero', 'admin', 'owner']}>
           <CompletarPedido />
+        </RequireAnyRole>
+      </RequireAuth>
+    ),
+  },
+  {
+    path: '/precios',
+    element: (
+      <RequireAuth>
+        <RequireAnyRole roles={['owner', 'admin']}>
+          <Precios />
         </RequireAnyRole>
       </RequireAuth>
     ),
