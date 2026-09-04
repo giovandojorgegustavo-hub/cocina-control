@@ -12,13 +12,27 @@ no participe en calcularlo.
 Un descuento tampoco viaja como importe. Lo que viaja es promo_code, un texto
 que el servidor valida contra promotions y convierte en porcentaje. El bot dice
 QUE el cliente pidio el descuento; cuanto vale lo decide la base.
+
+MODELO DE COBRO (decision del dueno, 2026-09-04): el cliente paga por Yape, por
+adelantado, SOLO los productos menos el descuento. El reparto no lo cobramos
+nosotros: lo cobra el motorizado en mano al llegar, y la tarifa por zona que
+guardamos en delivery_zones es un ESTIMADO que le decimos al cliente. Por eso
+la respuesta trae dos numeros distintos y no hay que confundirlos:
+
+- amount_due: items_total - discount_amount. Lo que el cliente debe yapear.
+- total: amount_due + delivery_fee. Sigue siendo el valor completo del pedido
+  para margen y reportes, aunque el envio no pase por nuestra cuenta.
+
+delivery_fee_payment lo deja documentado para quien consuma la API: hoy es
+siempre "on_arrival". El dia que se cobre el envio por Yape cambia el literal
+y amount_due, no la forma de la respuesta.
 """
 
 import uuid
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -219,6 +233,14 @@ class PaymentResponse(BaseModel):
 
 
 class SalesOrderResponse(BaseModel):
+    """El pedido con sus importes; ver MODELO DE COBRO al inicio del archivo.
+
+    items_total, discount_amount, delivery_fee y total se conservan tal cual:
+    total incluye el envio porque es el valor del pedido para reportes.
+    amount_due es lo que el cliente yapea (sin el envio), y
+    delivery_fee_payment dice quien cobra ese envio.
+    """
+
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
@@ -235,6 +257,10 @@ class SalesOrderResponse(BaseModel):
     promo_code: str | None = None
     delivery_fee: Decimal
     total: Decimal
+    # Lo que el cliente paga por Yape: productos menos descuento, sin envio.
+    amount_due: Decimal
+    # El envio lo cobra el motorizado al llegar; delivery_fee es un estimado.
+    delivery_fee_payment: Literal["on_arrival"] = "on_arrival"
     notes: str | None = None
     conversation_ref: str | None = None
     created_at: datetime

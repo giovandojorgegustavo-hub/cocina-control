@@ -26,6 +26,11 @@ Invariants
   archivo.
 - El telefono es la identidad del cliente: un pedido de un numero ya conocido
   reusa su fila en vez de duplicarla.
+- El envio NO lo cobramos nosotros. El cliente yapea amount_due (productos
+  menos descuento); delivery_fee es un estimado por zona que le decimos y que
+  el motorizado cobra en mano al llegar. total sigue incluyendo el envio
+  porque es el valor del pedido para margen y reportes. Las zonas activas
+  siguen mandando: fuera de cobertura no hay pedido.
 """
 
 import uuid
@@ -503,6 +508,10 @@ def _order_response(session: Session, order: SalesOrder) -> SalesOrderResponse:
         promo_code=order.promo_code,
         delivery_fee=order.delivery_fee,
         total=order.total,
+        # Se recalcula aca y no se persiste: es una vista de dos columnas que ya
+        # estan en la fila, y asi ningun pedido viejo queda sin el dato.
+        amount_due=_money(Decimal(order.items_total) - Decimal(order.discount_amount)),
+        delivery_fee_payment="on_arrival",
         notes=order.notes,
         conversation_ref=order.conversation_ref,
         created_at=order.created_at,
