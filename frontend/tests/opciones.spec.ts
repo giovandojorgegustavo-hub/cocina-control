@@ -1,10 +1,12 @@
 import { test, expect } from '@playwright/test'
 import { makeTestJwt } from './helpers/testJwt'
 
-// Pantalla de extras y opciones. La API se mockea: lo que se prueba es que la
-// pantalla liste los grupos con sus reglas, mande el PATCH de precio, el POST
-// de grupo y el PUT de asignacion correctos. La regla de negocio (quien puede
-// editar, single => max 1, el duplicado) vive en tests/test_option_groups.py.
+// Pantalla de extras y opciones, organizada por plato. La API se mockea: lo
+// que se prueba es que cada plato liste sus grupos con la regla en palabras,
+// que editar una opcion desde el plato mande el PATCH, que agregar o quitar
+// un grupo mande el PUT en orden, y que el POST/PATCH de grupo sigan andando
+// desde la seccion GRUPOS. La regla de negocio (quien puede editar, single =>
+// max 1, el duplicado) vive en tests/test_option_groups.py.
 
 const GROUPS_URL = '**/api/v1/option-groups?all=true'
 const PRODUCTS_URL = '**/api/v1/products?flow=sale'
@@ -71,7 +73,36 @@ const products = [
     sale_price: '24.90',
     discount_percent: null,
   },
+  {
+    id: 'p-2',
+    name: 'WRAP',
+    unit: 'un',
+    low_stock_threshold: null,
+    is_purchase: false,
+    is_sale: true,
+    sale_price: '19.90',
+    discount_percent: '10',
+  },
+  // Sin precio: no sale en la carta, no tiene sentido armarle opciones.
+  {
+    id: 'p-3',
+    name: 'GASEOSA',
+    unit: 'un',
+    low_stock_threshold: null,
+    is_purchase: false,
+    is_sale: true,
+    sale_price: null,
+    discount_percent: null,
+  },
 ]
+
+const links: Record<string, Array<{ group_id: string; name: string; sort_order: number }>> = {
+  'p-1': [{ group_id: 'g-1', name: 'Base', sort_order: 0 }],
+  'p-2': [
+    { group_id: 'g-1', name: 'Base', sort_order: 0 },
+    { group_id: 'g-2', name: 'Proteína extra', sort_order: 1 },
+  ],
+}
 
 async function injectToken(page: import('@playwright/test').Page, role: 'owner' | 'admin' | 'cocinero') {
   await page.goto('/login')
@@ -87,42 +118,68 @@ async function mockApi(page: import('@playwright/test').Page) {
   await page.route(PRODUCTS_URL, (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(products) }),
   )
-  await page.route('**/api/v1/products/p-1/option-groups', (route) => {
-    if (route.request().method() !== 'GET') return route.fallback()
-    return route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify([{ group_id: 'g-1', name: 'Base', sort_order: 0 }]),
+  for (const productId of Object.keys(links)) {
+    await page.route(`**/api/v1/products/${productId}/option-groups`, (route) => {
+      if (route.request().method() !== 'GET') return route.fallback()
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(links[productId]),
+      })
     })
-  })
+  }
 }
 
-test('lista los grupos con sus reglas y marca los apagados', async ({ page }) => {
+test('muestra cada plato con sus opciones y la regla en palabras', async ({ page }) => {
   await injectToken(page, 'owner')
   await mockApi(page)
   await page.goto('/opciones')
 
   await expect(page.getByRole('heading', { name: /EXTRAS Y OPCIONES/ })).toBeVisible()
-  await expect(page.getByText(/Las opciones con precio se suman al plato/)).toBeVisible()
+  await expect(page.getByText(/Lo que el cliente puede elegir o agregar en cada plato/)).toBeVisible()
 
-  const base = page.getByRole('article', { name: 'Grupo Base' })
-  await expect(base).toContainText('Una opción')
-  await expect(base).toContainText('Obligatorio')
-  await expect(base).toContainText('mín 1 / máx 1')
-  await expect(base.getByLabel('Activo — Base')).toBeChecked()
-  await expect(base).not.toHaveAttribute('data-inactive', 'true')
+  // Una tarjeta por plato con precio, con el precio final y el resumen de grupos.
+  const bowl = page.getByRole('article', { name: 'Plato ARMA TU BOWL' })
+  await expect(bowl).toContainText(/S\/\. 24[.,]90/)
+  await expect(bowl).toContainText('Base')
+  const wrap = page.getByRole('article', { name: 'Plato WRAP' })
+  await expect(wrap).toContainText(/S\/\. 17[.,]91/)
+  await expect(wrap).toContainText('Base · Proteína extra')
+  await expect(page.getByRole('article', { name: 'Plato GASEOSA' })).toHaveCount(0)
 
-  const extra = page.getByRole('article', { name: 'Grupo Proteína extra' })
-  await expect(extra).toContainText('Varias')
-  await expect(extra).toContainText('mín 1 / máx 2')
+  // Los grupos quedan plegados hasta que el dueno los pide.
+  await expect(page.getByRole('article', { name: 'Grupo Base' })).toHaveCount(0)
+
+  // Cerrado: no hay opciones. Abierto: cada grupo con su regla en palabras.
+  await expect(wrap.getByLabel('Precio de Camote')).toHaveCount(0)
+  await wrap.getByRole('button', { name: /WRAP/ }).click()
+
+  const base = wrap.getByRole('region', { name: 'Base en WRAP' })
+  await expect(base).toContainText('Elige 1')
+  await expect(base).toContainText('Este grupo se usa en 2 platos; el cambio aplica a todos.')
+  // Precio 0 se lee como incluido, no como 0.00.
+  await expect(base.getByLabel('Precio de Camote')).toHaveValue('')
+  await expect(base.getByLabel('Precio de Camote')).toHaveAttribute('placeholder', 'incluido')
+
+  const extra = wrap.getByRole('region', { name: 'Proteína extra en WRAP' })
+  await expect(extra).toContainText('Elige de 1 a 2')
+  await expect(extra).not.toContainText('se usa en')
+
+  // GRUPOS: mismas reglas en palabras, el apagado marcado.
+  await page.getByRole('button', { name: 'Ver grupos' }).click()
+  const baseGroup = page.getByRole('article', { name: 'Grupo Base' })
+  await expect(baseGroup).toContainText('Elige 1')
+  await expect(baseGroup).toContainText('en 2 platos')
+  await expect(baseGroup.getByLabel('Activo — Base')).toBeChecked()
 
   const adicionales = page.getByRole('article', { name: 'Grupo Adicionales' })
-  await expect(adicionales).not.toContainText('Obligatorio')
+  await expect(adicionales).toContainText('Opcional, hasta 6')
+  await expect(adicionales).toContainText('en ningún plato')
   await expect(adicionales.getByLabel('Activo — Adicionales')).not.toBeChecked()
   await expect(adicionales).toHaveAttribute('data-inactive', 'true')
 })
 
-test('abrir un grupo y guardar manda el PATCH de la opción', async ({ page }) => {
+test('editar el precio de una opción desde el plato manda el PATCH', async ({ page }) => {
   await injectToken(page, 'admin')
   await mockApi(page)
 
@@ -137,10 +194,9 @@ test('abrir un grupo y guardar manda el PATCH de la opción', async ({ page }) =
   })
 
   await page.goto('/opciones')
-  const extra = page.getByRole('article', { name: 'Grupo Proteína extra' })
-  // Cerrado: la tabla de opciones no esta.
-  await expect(extra.getByLabel('Precio de Filete de pollo')).toHaveCount(0)
-  await extra.getByRole('button', { name: /Proteína extra/ }).click()
+  const wrap = page.getByRole('article', { name: 'Plato WRAP' })
+  await wrap.getByRole('button', { name: /WRAP/ }).click()
+  const extra = wrap.getByRole('region', { name: 'Proteína extra en WRAP' })
 
   const priceInput = extra.getByLabel('Precio de Filete de pollo')
   await expect(priceInput).toHaveValue('7.00')
@@ -155,7 +211,7 @@ test('abrir un grupo y guardar manda el PATCH de la opción', async ({ page }) =
   expect(sentBody).toEqual({ price: '9', is_active: true })
 })
 
-test('agregar una opción manda el POST al grupo', async ({ page }) => {
+test('agregar una opción desde el plato manda el POST al grupo', async ({ page }) => {
   await injectToken(page, 'owner')
   await mockApi(page)
 
@@ -177,10 +233,11 @@ test('agregar una opción manda el POST al grupo', async ({ page }) => {
   })
 
   await page.goto('/opciones')
-  const extra = page.getByRole('article', { name: 'Grupo Proteína extra' })
-  await extra.getByRole('button', { name: /Proteína extra/ }).click()
+  const wrap = page.getByRole('article', { name: 'Plato WRAP' })
+  await wrap.getByRole('button', { name: /WRAP/ }).click()
+  const extra = wrap.getByRole('region', { name: 'Proteína extra en WRAP' })
 
-  const add = extra.getByRole('button', { name: 'Agregar' })
+  const add = extra.getByRole('button', { name: 'Agregar', exact: true })
   await expect(add).toBeDisabled()
   await extra.getByLabel('Nueva opción en Proteína extra', { exact: true }).fill('Tilapia')
   await extra.getByLabel('Precio de la nueva opción en Proteína extra').fill('8')
@@ -188,6 +245,68 @@ test('agregar una opción manda el POST al grupo', async ({ page }) => {
 
   await expect(extra.getByLabel('Nueva opción en Proteína extra', { exact: true })).toHaveValue('')
   expect(sentBody).toEqual({ name: 'Tilapia', price: '8' })
+})
+
+test('agregar un grupo al plato manda el PUT con el grupo nuevo al final', async ({ page }) => {
+  await injectToken(page, 'admin')
+  await mockApi(page)
+
+  let sentBody: unknown = null
+  await page.route('**/api/v1/products/p-1/option-groups', (route) => {
+    if (route.request().method() !== 'PUT') return route.fallback()
+    sentBody = route.request().postDataJSON()
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([
+        { group_id: 'g-1', name: 'Base', sort_order: 0 },
+        { group_id: 'g-2', name: 'Proteína extra', sort_order: 1 },
+      ]),
+    })
+  })
+
+  await page.goto('/opciones')
+  const bowl = page.getByRole('article', { name: 'Plato ARMA TU BOWL' })
+  await bowl.getByRole('button', { name: /ARMA TU BOWL/ }).click()
+
+  const select = bowl.getByLabel('Agregar grupo a ARMA TU BOWL')
+  // Ya asignado y apagado no se ofrecen.
+  await expect(select.locator('option', { hasText: 'Base' })).toHaveCount(0)
+  await expect(select.locator('option', { hasText: 'Adicionales' })).toHaveCount(0)
+  const add = bowl.getByRole('button', { name: 'Agregar grupo' })
+  await expect(add).toBeDisabled()
+
+  await select.selectOption('g-2')
+  await add.click()
+
+  await expect(select).toHaveValue('')
+  expect(sentBody).toEqual({ group_ids: ['g-1', 'g-2'] })
+})
+
+test('quitar un grupo del plato manda el PUT sin ese grupo', async ({ page }) => {
+  await injectToken(page, 'owner')
+  await mockApi(page)
+
+  let sentBody: unknown = null
+  await page.route('**/api/v1/products/p-2/option-groups', (route) => {
+    if (route.request().method() !== 'PUT') return route.fallback()
+    sentBody = route.request().postDataJSON()
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([{ group_id: 'g-2', name: 'Proteína extra', sort_order: 0 }]),
+    })
+  })
+
+  await page.goto('/opciones')
+  const wrap = page.getByRole('article', { name: 'Plato WRAP' })
+  await wrap.getByRole('button', { name: /WRAP/ }).click()
+  await wrap
+    .getByRole('region', { name: 'Base en WRAP' })
+    .getByRole('button', { name: 'Quitar de este plato' })
+    .click()
+
+  await expect.poll(() => sentBody).toEqual({ group_ids: ['g-2'] })
 })
 
 test('crear un grupo manda el POST con sus reglas', async ({ page }) => {
@@ -217,6 +336,9 @@ test('crear un grupo manda el POST con sus reglas', async ({ page }) => {
   })
 
   await page.goto('/opciones')
+  await expect(page.getByRole('form', { name: 'Nuevo grupo' })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Ver grupos' }).click()
+
   const create = page.getByRole('button', { name: 'Crear grupo' })
   await expect(create).toBeDisabled()
 
@@ -230,38 +352,40 @@ test('crear un grupo manda el POST con sus reglas', async ({ page }) => {
   expect(sentBody).toEqual({ name: 'Salsa', selection: 'multiple', required: true, max_choices: 2 })
 })
 
-test('asignar grupos a un plato manda el PUT en orden', async ({ page }) => {
-  await injectToken(page, 'admin')
+test('editar las reglas de un grupo manda el PATCH', async ({ page }) => {
+  await injectToken(page, 'owner')
   await mockApi(page)
 
   let sentBody: unknown = null
-  await page.route('**/api/v1/products/p-1/option-groups', (route) => {
-    if (route.request().method() !== 'PUT') return route.fallback()
+  await page.route('**/api/v1/option-groups/g-2', (route) => {
+    if (route.request().method() !== 'PATCH') return route.fallback()
     sentBody = route.request().postDataJSON()
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify([
-        { group_id: 'g-1', name: 'Base', sort_order: 0 },
-        { group_id: 'g-2', name: 'Proteína extra', sort_order: 1 },
-      ]),
+      body: JSON.stringify({ ...groups[1], max_choices: 3 }),
     })
   })
 
   await page.goto('/opciones')
-  const card = page.getByRole('article', { name: 'Opciones de ARMA TU BOWL' })
-  await expect(card.getByLabel('Base — ARMA TU BOWL')).toBeChecked()
-  await expect(card.getByLabel('Proteína extra — ARMA TU BOWL')).not.toBeChecked()
-  // Un grupo apagado no se ofrece para asignar.
-  await expect(card.getByLabel('Adicionales — ARMA TU BOWL')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Ver grupos' }).click()
+  const extra = page.getByRole('article', { name: 'Grupo Proteína extra' })
+  await extra.getByRole('button', { name: 'Editar grupo Proteína extra' }).click()
 
-  const save = card.getByRole('button', { name: 'Guardar' })
-  await expect(save).toBeDisabled()
-  await card.getByLabel('Proteína extra — ARMA TU BOWL').check()
-  await save.click()
+  const form = extra.getByRole('form', { name: 'Editar grupo Proteína extra' })
+  await expect(form).toContainText('Elige de 1 a 2')
+  await form.getByLabel('Máximo del grupo Proteína extra').fill('3')
+  await expect(form).toContainText('Elige de 1 a 3')
+  await form.getByRole('button', { name: 'Guardar' }).click()
 
-  await expect(card.getByText('Guardado')).toBeVisible()
-  expect(sentBody).toEqual({ group_ids: ['g-1', 'g-2'] })
+  await expect(form).toHaveCount(0)
+  expect(sentBody).toEqual({
+    name: 'Proteína extra',
+    selection: 'multiple',
+    required: true,
+    min_choices: 1,
+    max_choices: 3,
+  })
 })
 
 test('el cocinero no llega a /opciones', async ({ page }) => {
