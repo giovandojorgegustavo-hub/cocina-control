@@ -26,13 +26,14 @@ sale mal devuelve lo que pudo y el viaje se registra igual. Un reparto no se
 bloquea porque un tercero cambio su JSON.
 """
 
+import json
 import logging
 import re
+import urllib.error
+import urllib.request
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import urlparse
-
-import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -101,13 +102,18 @@ def leer_viaje(tracking_url: str) -> ViajeLeido:
     if api is None:
         logger.warning("indrive: el link no tiene la forma esperada")
         return ViajeLeido(None, None, False)
+    # Se usa urllib de la biblioteca estandar a proposito: httpx vive en
+    # optional-dependencies.dev, o sea que existe en los tests y NO en el venv
+    # de produccion. Importarlo desde codigo de runtime tumbo el servicio
+    # entero con ModuleNotFoundError. Una dependencia de test no puede estar en
+    # el camino de arranque de la aplicacion.
     try:
-        with httpx.Client(timeout=_TIMEOUT_S) as client:
-            r = client.get(api)
-        if r.status_code != 200:
-            logger.warning("indrive: respondio %s", r.status_code)
-            return ViajeLeido(None, None, False)
-        data = r.json()
+        peticion = urllib.request.Request(api, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(peticion, timeout=_TIMEOUT_S) as respuesta:  # noqa: S310
+            if respuesta.status != 200:
+                logger.warning("indrive: respondio %s", respuesta.status)
+                return ViajeLeido(None, None, False)
+            data = json.loads(respuesta.read().decode("utf-8"))
     except Exception as exc:  # noqa: BLE001 — un tercero caido no rompe el reparto
         logger.warning("indrive: no se pudo leer el link (%s)", type(exc).__name__)
         return ViajeLeido(None, None, False)
