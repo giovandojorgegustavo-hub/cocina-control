@@ -397,8 +397,8 @@ test('el cocinero no llega a /opciones', async ({ page }) => {
 test('el home del admin lleva a extras', async ({ page }) => {
   await injectToken(page, 'admin')
   await page.goto('/')
-  await expect(page.getByRole('button', { name: /^EXTRAS/ })).toContainText('(opciones y adicionales)')
+  await expect(page.getByRole('button', { name: /^Extras y opciones/ })).toContainText('Adicionales por grupo')
   await mockApi(page)
-  await page.getByRole('button', { name: /^EXTRAS/ }).click()
+  await page.getByRole('button', { name: /^Extras y opciones/ }).click()
   await expect(page).toHaveURL('/opciones')
 })

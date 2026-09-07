@@ -166,8 +166,8 @@ test('el cocinero no llega a /precios', async ({ page }) => {
 test('el tablero del owner y el home del admin llevan a precios', async ({ page }) => {
   await injectToken(page, 'admin')
   await page.goto('/')
-  await expect(page.getByRole('button', { name: /^PRECIOS/ })).toContainText('(carta y descuentos)')
+  await expect(page.getByRole('button', { name: /^Precios y descuentos/ })).toContainText('Carta y promociones')
   await mockCatalog(page)
-  await page.getByRole('button', { name: /^PRECIOS/ }).click()
+  await page.getByRole('button', { name: /^Precios y descuentos/ }).click()
   await expect(page).toHaveURL('/precios')
 })
