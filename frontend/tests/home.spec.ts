@@ -5,7 +5,10 @@ import { makeTestJwt } from './helpers/testJwt'
 const PENDING_URL = '**/api/v1/purchase-orders/pending'
 const LOGOUT_URL = '**/api/v1/auth/logout'
 
-async function injectToken(page: import('@playwright/test').Page, role: 'operator' | 'owner') {
+async function injectToken(
+  page: import('@playwright/test').Page,
+  role: 'operator' | 'owner' | 'admin',
+) {
   const token = makeTestJwt(role)
   await page.goto('/login')
   await page.evaluate((t) => {
@@ -14,36 +17,64 @@ async function injectToken(page: import('@playwright/test').Page, role: 'operato
   return token
 }
 
+// Card accessible names are "<title> — <subtitle>". These regexes target the
+// menu cards specifically (the footer "ver pedidos" is matched separately).
+const CARD_ENTRADA = /Entrada — /i
+const CARD_INVENTARIO = /Inventario — /i
+const CARD_PEDIDOS = /Pedidos — Bandeja/i
+const CARD_NUEVA_ORDEN = /Nueva orden — /i
+const CARD_PRECIOS = /Precios y descuentos — /i
+const CARD_EXTRAS = /Extras y opciones — /i
+const CARD_DISTRITOS = /Distritos de reparto — /i
+
 // ---------------------------------------------------------------------------
-// test_home_renders_three_big_buttons
+// test_home_operacion_section_renders_for_cocinero
 // ---------------------------------------------------------------------------
 
-test('test_home_renders_three_big_buttons', async ({ page }) => {
+test('test_home_operacion_section_renders_for_cocinero', async ({ page }) => {
   await injectToken(page, 'operator')
   await page.goto('/')
 
-  // Verify the three buttons exist with the correct text
-  await expect(page.getByRole('button', { name: /ENTRADA/i })).toBeVisible()
-  await expect(page.getByRole('button', { name: /INVENTARIO/i })).toBeVisible()
-  await expect(page.getByRole('button', { name: /^PEDIDO/ })).toBeVisible()
+  // The OPERACIÓN section and its three base cards are visible
+  await expect(page.getByRole('region', { name: /operación/i })).toBeVisible()
+  await expect(page.getByRole('button', { name: CARD_ENTRADA })).toBeVisible()
+  await expect(page.getByRole('button', { name: CARD_INVENTARIO })).toBeVisible()
+  await expect(page.getByRole('button', { name: CARD_PEDIDOS })).toBeVisible()
 })
 
 // ---------------------------------------------------------------------------
-// test_home_button_touch_target_min_48px
+// test_cocinero_does_not_see_carta_section
 // ---------------------------------------------------------------------------
 
-test('test_home_button_touch_target_min_48px', async ({ page }) => {
+test('test_cocinero_does_not_see_carta_section', async ({ page }) => {
   await injectToken(page, 'operator')
   await page.goto('/')
 
-  const buttons = [
-    page.getByRole('button', { name: /ENTRADA/i }),
-    page.getByRole('button', { name: /INVENTARIO/i }),
-    page.getByRole('button', { name: /^PEDIDO/ }),
+  // OPERACIÓN is present, but CARTA (and its cards) must never render
+  await expect(page.getByRole('region', { name: /operación/i })).toBeVisible()
+  await expect(page.getByRole('region', { name: /^carta$/i })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: CARD_PRECIOS })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: CARD_EXTRAS })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: CARD_DISTRITOS })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: CARD_NUEVA_ORDEN })).toHaveCount(0)
+})
+
+// ---------------------------------------------------------------------------
+// test_home_card_touch_target_min_48px
+// ---------------------------------------------------------------------------
+
+test('test_home_card_touch_target_min_48px', async ({ page }) => {
+  await injectToken(page, 'operator')
+  await page.goto('/')
+
+  const cards = [
+    page.getByRole('button', { name: CARD_ENTRADA }),
+    page.getByRole('button', { name: CARD_INVENTARIO }),
+    page.getByRole('button', { name: CARD_PEDIDOS }),
   ]
 
-  for (const button of buttons) {
-    const box = await button.boundingBox()
+  for (const card of cards) {
+    const box = await card.boundingBox()
     expect(box).not.toBeNull()
     expect(box!.width).toBeGreaterThanOrEqual(48)
     expect(box!.height).toBeGreaterThanOrEqual(48)
@@ -51,25 +82,80 @@ test('test_home_button_touch_target_min_48px', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// test_entrada_button_navigates_to_bandeja
+// test_home_card_touch_target_min_100px
+// min-h-[120px] is the real constraint; 100px is a safe lower bound.
 // ---------------------------------------------------------------------------
 
-test('test_entrada_button_navigates_to_bandeja', async ({ page }) => {
+test('test_home_card_touch_target_min_100px', async ({ page }) => {
+  await injectToken(page, 'operator')
+  await page.goto('/')
+
+  const cards = [
+    page.getByRole('button', { name: CARD_ENTRADA }),
+    page.getByRole('button', { name: CARD_INVENTARIO }),
+    page.getByRole('button', { name: CARD_PEDIDOS }),
+  ]
+
+  for (const card of cards) {
+    const box = await card.boundingBox()
+    expect(box).not.toBeNull()
+    expect(box!.height).toBeGreaterThanOrEqual(100)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// test_entrada_card_navigates_to_bandeja
+// ---------------------------------------------------------------------------
+
+test('test_entrada_card_navigates_to_bandeja', async ({ page }) => {
   await injectToken(page, 'operator')
 
-  // Mock GET /purchase-orders/pending to return empty list so BandejaPartidas renders
   await page.route(PENDING_URL, (route) => {
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify([]),
-    })
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
   })
 
   await page.goto('/')
-  await page.getByRole('button', { name: /ENTRADA/i }).click()
+  await page.getByRole('button', { name: CARD_ENTRADA }).click()
 
   await expect(page).toHaveURL(/\/entradas/)
+})
+
+// ---------------------------------------------------------------------------
+// test_inventario_card_navigates_to_inventario
+// ---------------------------------------------------------------------------
+
+test('test_inventario_card_navigates_to_inventario', async ({ page }) => {
+  await injectToken(page, 'operator')
+  await page.goto('/')
+  await page.getByRole('button', { name: CARD_INVENTARIO }).click()
+  await expect(page).toHaveURL(/\/inventario/)
+})
+
+// ---------------------------------------------------------------------------
+// test_pedidos_card_navigates_to_bandeja (issue #139: bandeja-first)
+// ---------------------------------------------------------------------------
+
+test('test_pedidos_card_navigates_to_bandeja', async ({ page }) => {
+  await injectToken(page, 'operator')
+  await page.route('**/api/v1/delivery-orders*', (route) => {
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: CARD_PEDIDOS }).click()
+  await expect(page).toHaveURL('/pedidos')
+})
+
+// ---------------------------------------------------------------------------
+// test_home_card_subtitles (one-line subtitle copy)
+// ---------------------------------------------------------------------------
+
+test('test_home_card_subtitles', async ({ page }) => {
+  await injectToken(page, 'operator')
+  await page.goto('/')
+
+  await expect(page.getByRole('button', { name: CARD_ENTRADA })).toContainText('Llegó una entrega')
+  await expect(page.getByRole('button', { name: CARD_INVENTARIO })).toContainText('Contar stock')
+  await expect(page.getByRole('button', { name: CARD_PEDIDOS })).toContainText('Bandeja y foto')
 })
 
 // ---------------------------------------------------------------------------
@@ -80,61 +166,12 @@ test('test_operator_home_shows_logout', async ({ page }) => {
   await injectToken(page, 'operator')
   await page.goto('/')
 
-  // The "cerrar" button must be visible
   const cerrar = page.getByRole('button', { name: 'cerrar' })
   await expect(cerrar).toBeVisible()
 })
 
 // ---------------------------------------------------------------------------
-// test_owner_visiting_home_redirected_to_tablero
-// The guard on '/' is RequireAnyRole(['cocinero', 'admin']).
-// Owner visiting '/' is redirected to '/tablero'.
-// ---------------------------------------------------------------------------
-
-test('test_owner_visiting_home_redirected_to_tablero', async ({ page }) => {
-  await injectToken(page, 'owner')
-
-  // Navigate to / as an owner — must be redirected to /tablero
-  await page.goto('/')
-
-  await expect(page).toHaveURL(/\/tablero/)
-})
-
-// ---------------------------------------------------------------------------
-// Extra: logout works from home
-// ---------------------------------------------------------------------------
-
-test('home logout clears session and navigates to login', async ({ page }) => {
-  await injectToken(page, 'operator')
-
-  await page.route(LOGOUT_URL, (route) => {
-    route.fulfill({ status: 204, body: '' })
-  })
-
-  await page.goto('/')
-  await page.getByRole('button', { name: 'cerrar' }).click()
-
-  await expect(page).toHaveURL(/\/login/)
-})
-
-// ---------------------------------------------------------------------------
-// test_home_button_subtitles_have_parentheses (C-5)
-// Wireframe specifies the subtitle copy with parentheses.
-// ---------------------------------------------------------------------------
-
-test('test_home_button_subtitles_have_parentheses', async ({ page }) => {
-  await injectToken(page, 'operator')
-  await page.goto('/')
-
-  await expect(page.getByRole('button', { name: /ENTRADA/i })).toContainText('(llegó una entrega)')
-  await expect(page.getByRole('button', { name: /INVENTARIO/i })).toContainText('(contar stock)')
-  await expect(page.getByRole('button', { name: /^PEDIDO/ })).toContainText('(bandeja y foto)')
-})
-
-// ---------------------------------------------------------------------------
 // test_home_footer_navega_a_bandeja_pedidos (issue #136)
-// The footer is the entry point to the pedidos bandeja — before this fix the
-// bandeja existed but no screen navigated to it.
 // ---------------------------------------------------------------------------
 
 test('test_home_footer_navega_a_bandeja_pedidos', async ({ page }) => {
@@ -149,51 +186,20 @@ test('test_home_footer_navega_a_bandeja_pedidos', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
-// test_inventario_button_navigates_to_inventario (CS-3)
+// home logout clears session and navigates to login
 // ---------------------------------------------------------------------------
 
-test('test_inventario_button_navigates_to_inventario', async ({ page }) => {
+test('home logout clears session and navigates to login', async ({ page }) => {
   await injectToken(page, 'operator')
-  await page.goto('/')
-  await page.getByRole('button', { name: /INVENTARIO/i }).click()
-  await expect(page).toHaveURL(/\/inventario/)
-})
 
-// ---------------------------------------------------------------------------
-// test_pedido_button_navigates_to_bandeja (issue #139: bandeja-first)
-// ---------------------------------------------------------------------------
-
-test('test_pedido_button_navigates_to_bandeja', async ({ page }) => {
-  await injectToken(page, 'operator')
-  await page.route('**/api/v1/delivery-orders*', (route) => {
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
+  await page.route(LOGOUT_URL, (route) => {
+    route.fulfill({ status: 204, body: '' })
   })
+
   await page.goto('/')
-  await page.getByRole('button', { name: /^PEDIDO/ }).click()
-  await expect(page).toHaveURL('/pedidos')
-})
+  await page.getByRole('button', { name: 'cerrar' }).click()
 
-// ---------------------------------------------------------------------------
-// test_home_button_touch_target_min_100px (CS-4)
-// The real min-h-[120px] class means buttons are well above 100px — test that.
-// ---------------------------------------------------------------------------
-
-test('test_home_button_touch_target_min_100px', async ({ page }) => {
-  await injectToken(page, 'operator')
-  await page.goto('/')
-
-  const buttons = [
-    page.getByRole('button', { name: /ENTRADA/i }),
-    page.getByRole('button', { name: /INVENTARIO/i }),
-    page.getByRole('button', { name: /^PEDIDO/ }),
-  ]
-
-  for (const button of buttons) {
-    const box = await button.boundingBox()
-    expect(box).not.toBeNull()
-    // min-h-[120px] is the real constraint; 100px is a safe lower bound for this viewport
-    expect(box!.height).toBeGreaterThanOrEqual(100)
-  }
+  await expect(page).toHaveURL(/\/login/)
 })
 
 // ---------------------------------------------------------------------------
@@ -233,35 +239,59 @@ test('test_logout_clears_query_cache', async ({ page }) => {
   await page.getByRole('button', { name: 'cerrar' }).click()
   await expect(page).toHaveURL(/\/login/)
 
-  // Verify the query cache was cleared: querying deliveries after logout
-  // must not return the previously cached data
-  const cachedData = await page.evaluate(() => {
-    // The QueryClient is not directly accessible from the page context, but we
-    // can verify indirectly: sessionStorage no longer holds a token, so any
-    // subsequent navigation to /entradas redirects to login (auth guard).
-    return sessionStorage.getItem('cocina-auth')
-  })
-
-  // Token is cleared — auth state is null
+  const cachedData = await page.evaluate(() => sessionStorage.getItem('cocina-auth'))
   const authState = cachedData ? JSON.parse(cachedData) : null
   const token = authState?.state?.token ?? null
   expect(token).toBeNull()
 })
 
 // ---------------------------------------------------------------------------
-// test_admin_visiting_home_sees_nueva_orden_button (Fix 5 / QA-MEDIO 6)
+// test_admin_sees_carta_section_and_nueva_orden (Fix 5 / QA-MEDIO 6)
 // ---------------------------------------------------------------------------
 
-test('test_admin_visiting_home_sees_nueva_orden_button', async ({ page }) => {
-  const adminToken = makeTestJwt('admin')
-  await page.goto('/login')
-  await page.evaluate((t) => {
-    sessionStorage.setItem('cocina-auth', JSON.stringify({ state: { token: t }, version: 0 }))
-  }, adminToken)
-
+test('test_admin_sees_carta_section_and_nueva_orden', async ({ page }) => {
+  await injectToken(page, 'admin')
   await page.goto('/')
 
-  // Admin lands on home (not /tablero) and sees the NUEVA ORDEN button
+  // Admin lands on home (not /tablero) and sees both sections
   await expect(page).toHaveURL('/')
-  await expect(page.getByRole('button', { name: /NUEVA ORDEN/i })).toBeVisible()
+  await expect(page.getByRole('button', { name: CARD_NUEVA_ORDEN })).toBeVisible()
+  await expect(page.getByRole('region', { name: /^carta$/i })).toBeVisible()
+  await expect(page.getByRole('button', { name: CARD_PRECIOS })).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// test_owner_can_open_menu_and_sees_both_sections
+// The '/' guard now allows owner too, so the owner can open the grouped menu
+// (their landing page remains /tablero via Login).
+// ---------------------------------------------------------------------------
+
+test('test_owner_can_open_menu_and_sees_both_sections', async ({ page }) => {
+  await injectToken(page, 'owner')
+  await page.goto('/')
+
+  await expect(page).toHaveURL('/')
+  await expect(page.getByRole('region', { name: /operación/i })).toBeVisible()
+  await expect(page.getByRole('region', { name: /^carta$/i })).toBeVisible()
+  await expect(page.getByRole('button', { name: CARD_DISTRITOS })).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// test_carta_card_navigates_to_precios
+// ---------------------------------------------------------------------------
+
+test('test_carta_card_navigates_to_precios', async ({ page }) => {
+  await injectToken(page, 'admin')
+
+  await page.route('**/api/v1/products*', (route) => {
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
+  })
+  await page.route('**/api/v1/promotions*', (route) => {
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
+  })
+
+  await page.goto('/')
+  await page.getByRole('button', { name: CARD_PRECIOS }).click()
+
+  await expect(page).toHaveURL(/\/precios/)
 })

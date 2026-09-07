@@ -149,8 +149,8 @@ test('el cocinero no llega a /zonas', async ({ page }) => {
 test('el home del admin lleva a distritos', async ({ page }) => {
   await injectToken(page, 'admin')
   await page.goto('/')
-  await expect(page.getByRole('button', { name: /^DISTRITOS/ })).toContainText('(reparto y tarifas)')
+  await expect(page.getByRole('button', { name: /^Distritos de reparto/ })).toContainText('Zonas y tarifas')
   await mockZones(page)
-  await page.getByRole('button', { name: /^DISTRITOS/ }).click()
+  await page.getByRole('button', { name: /^Distritos de reparto/ }).click()
   await expect(page).toHaveURL('/zonas')
 })

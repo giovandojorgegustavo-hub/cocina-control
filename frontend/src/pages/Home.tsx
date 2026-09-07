@@ -3,39 +3,48 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useAuthWithGetters } from '../lib/auth'
 import { apiClient } from '../lib/api'
 
-interface ActionButtonProps {
+interface ActionCardProps {
   title: string
   subtitle: string
   to: string
 }
 
-function ActionButton({ title, subtitle, to }: ActionButtonProps) {
+// Dark, touch-friendly card. Keeps the kitchen-first visual language (dark
+// surface, big tap target) but now lives inside a grouped grid instead of a
+// full-height column, so the home reads as a menu rather than a wall.
+function ActionCard({ title, subtitle, to }: ActionCardProps) {
   const navigate = useNavigate()
 
   return (
     <button
       onClick={() => navigate(to)}
       className={[
-        // Touch target: min 120px tall on mobile, fill available height on tablet
-        'flex flex-col items-center justify-center',
-        'min-h-[120px] md:min-h-0 md:flex-1',
-        'w-full md:w-auto',
+        'flex flex-col items-start justify-center text-left',
+        // Generous tap target for kitchen staff (min 48px WAI-ARIA, ~120px here)
+        'min-h-[120px] min-w-[48px] w-full',
         'bg-gray-900 text-white',
-        'px-4 py-6',
-        'rounded-none border-0',
+        'px-5 py-6',
+        'rounded-lg border-0',
         'active:bg-gray-700',
-        // Ensure tappable area is never below 48px (WAI-ARIA)
-        'min-w-[48px]',
       ].join(' ')}
       aria-label={`${title} — ${subtitle}`}
     >
-      <span className="text-3xl md:text-4xl font-black tracking-widest uppercase leading-none">
+      <span className="text-2xl md:text-3xl font-black tracking-wide uppercase leading-none">
         {title}
       </span>
       <span className="mt-2 text-sm md:text-base font-normal text-gray-400 normal-case">
         {subtitle}
       </span>
     </button>
+  )
+}
+
+// Small uppercase section header — same lightweight style as Precios' headers.
+function SectionHeader({ children }: { children: React.ReactNode }) {
+  return (
+    <h2 className="text-xs font-bold uppercase tracking-widest text-gray-500 mb-3">
+      {children}
+    </h2>
   )
 }
 
@@ -59,7 +68,7 @@ export function Home() {
   }
 
   return (
-    <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
+    <div className="min-h-screen flex flex-col bg-gray-50">
       {/* Header */}
       <header className="bg-gray-900 text-white px-4 py-4 flex items-center justify-between flex-shrink-0">
         <h1 className="text-xl font-bold tracking-wide">Cocina Control</h1>
@@ -75,26 +84,35 @@ export function Home() {
       </header>
 
       {/*
-        Main area: 3 (or 4) action buttons.
-        Tablet landscape (md+): side by side, each filling available width, filling remaining height.
-        Mobile: stacked vertically, each ~1/4 screen height.
-        owner/admin get NUEVA ORDEN, PRECIOS, EXTRAS and DISTRITOS as extra buttons.
+        Grouped menu. Kitchen staff (cocinero) only see OPERACIÓN; owner/admin
+        also get the CARTA section. Role comes synchronously from the decoded
+        JWT (useAuthWithGetters), so the CARTA section never flashes for a
+        cocinero — it is simply never rendered unless canCreateOrders is true.
       */}
-      <main className="flex-1 flex flex-col md:flex-row gap-px bg-gray-300 overflow-hidden">
-        <ActionButton title="ENTRADA" subtitle="(llegó una entrega)" to="/entradas" />
-        <ActionButton title="INVENTARIO" subtitle="(contar stock)" to="/inventario" />
-        <ActionButton title="PEDIDO" subtitle="(bandeja y foto)" to="/pedidos" />
+      <main className="flex-1 px-4 py-6 flex flex-col gap-8">
+        {/* OPERACIÓN — visible to every role */}
+        <section aria-label="Operación">
+          <SectionHeader>Operación</SectionHeader>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <ActionCard title="Entrada" subtitle="Llegó una entrega" to="/entradas" />
+            <ActionCard title="Inventario" subtitle="Contar stock" to="/inventario" />
+            <ActionCard title="Pedidos" subtitle="Bandeja y foto" to="/pedidos" />
+            {canCreateOrders && (
+              <ActionCard title="Nueva orden" subtitle="Cargar compra" to="/ordenes/nueva" />
+            )}
+          </div>
+        </section>
+
+        {/* CARTA — owner/admin only */}
         {canCreateOrders && (
-          <ActionButton title="NUEVA ORDEN" subtitle="(cargar compra)" to="/ordenes/nueva" />
-        )}
-        {canCreateOrders && (
-          <ActionButton title="PRECIOS" subtitle="(carta y descuentos)" to="/precios" />
-        )}
-        {canCreateOrders && (
-          <ActionButton title="EXTRAS" subtitle="(opciones y adicionales)" to="/opciones" />
-        )}
-        {canCreateOrders && (
-          <ActionButton title="DISTRITOS" subtitle="(reparto y tarifas)" to="/zonas" />
+          <section aria-label="Carta">
+            <SectionHeader>Carta</SectionHeader>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              <ActionCard title="Precios y descuentos" subtitle="Carta y promociones" to="/precios" />
+              <ActionCard title="Extras y opciones" subtitle="Adicionales por grupo" to="/opciones" />
+              <ActionCard title="Distritos de reparto" subtitle="Zonas y tarifas" to="/zonas" />
+            </div>
+          </section>
         )}
       </main>
 
