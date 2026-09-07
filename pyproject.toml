@@ -15,13 +15,16 @@ dependencies = [
     "pyjwt>=2.9",
     "email-validator>=2.0",
     "python-multipart>=0.0.32",
+    # httpx en deps principales a proposito: el asistente del panel lo usa en
+    # runtime (services/assistant_llm.py). Un incidente previo se causo por
+    # tenerlo solo como dependencia de test.
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
-    "httpx>=0.27.0",
     "ruff>=0.8.0",
     "pytest-postgresql>=6.1",
 ]

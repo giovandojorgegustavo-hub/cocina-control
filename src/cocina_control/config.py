@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     # The kitchen operates in Peru → America/Lima (UTC-5, no DST).
     business_timezone: str = "America/Lima"
 
+    # Clave de la API de Anthropic para el asistente del panel. Opcional a
+    # proposito: sin ella el endpoint /assistant/propose responde 503 y la
+    # funcion queda inerte. Es el default seguro — el asistente no existe
+    # hasta que alguien carga una clave, y nunca se versiona en el repo.
+    assistant_api_key: str | None = None
+
     @field_validator("jwt_secret")
     @classmethod
     def _jwt_secret_min_length(cls, v: str) -> str:
