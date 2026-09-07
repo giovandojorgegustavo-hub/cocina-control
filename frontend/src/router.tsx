@@ -33,7 +33,7 @@ export const router = createBrowserRouter([
     path: '/',
     element: (
       <RequireAuth>
-        <RequireAnyRole roles={['cocinero', 'admin']}>
+        <RequireAnyRole roles={['cocinero', 'admin', 'owner']}>
           <Home />
         </RequireAnyRole>
       </RequireAuth>

@@ -467,6 +467,12 @@ export function Tablero() {
         <div className="flex items-center gap-4">
           <span className="text-sm text-gray-300">{userId ?? 'dueno'}</span>
           <Link
+            to="/"
+            className="min-h-[48px] px-4 flex items-center justify-center border border-white text-white text-sm font-bold uppercase tracking-wide active:opacity-70"
+          >
+            menú
+          </Link>
+          <Link
             to="/ordenes/nueva"
             className="min-h-[48px] px-4 flex items-center justify-center bg-white text-gray-900 text-sm font-bold uppercase tracking-wide active:opacity-70"
           >

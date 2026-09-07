@@ -111,6 +111,32 @@ test('test_tablero_redirects_operator_to_home', async ({ page }) => {
 })
 
 // ---------------------------------------------------------------------------
+// test_tablero_menu_link_navigates_to_home
+// The header now carries a "menú" link back to the grouped home menu.
+// ---------------------------------------------------------------------------
+
+test('test_tablero_menu_link_navigates_to_home', async ({ page }) => {
+  await injectToken(page, 'owner')
+
+  await page.route(SUMMARY_URL, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(MOCK_SUMMARY_FULL),
+    })
+  })
+
+  await page.goto('/tablero')
+  await expect(page.getByRole('region', { name: /pedidos en el periodo/i })).toBeVisible()
+
+  await page.getByRole('link', { name: /^menú$/i }).click()
+
+  // Owner is now allowed on '/', so the grouped menu opens
+  await expect(page).toHaveURL('/')
+  await expect(page.getByRole('region', { name: /operación/i })).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
 // test_summary_widgets_render
 // ---------------------------------------------------------------------------
 
