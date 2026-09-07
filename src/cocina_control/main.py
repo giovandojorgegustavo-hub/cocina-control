@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 # only traffic that arrives via the local Caddy process is trusted.
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
+from cocina_control.api.assistant import router as assistant_router
 from cocina_control.api.auth import router as auth_router
 from cocina_control.api.dashboard import router as dashboard_router
 from cocina_control.api.deliveries import router as deliveries_router
@@ -67,6 +68,7 @@ app.include_router(delivery_trips_router, prefix="/api/v1")
 app.include_router(sales_orders_router, prefix="/api/v1")
 app.include_router(promotions_router, prefix="/api/v1")
 app.include_router(option_groups_router, prefix="/api/v1")
+app.include_router(assistant_router, prefix="/api/v1")
 
 # ---------------------------------------------------------------------------
 # Test-only endpoints

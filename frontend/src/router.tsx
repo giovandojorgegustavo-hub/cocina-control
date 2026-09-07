@@ -17,6 +17,7 @@ import { Trazabilidad } from './pages/Trazabilidad'
 import { Precios } from './pages/Precios'
 import { Zonas } from './pages/Zonas'
 import { Opciones } from './pages/Opciones'
+import { Asistente } from './pages/Asistente'
 import { RequireAuth, RequireRole, RequireAnyRole } from './lib/guards'
 
 // React Router requires basename WITHOUT trailing slash.
@@ -196,6 +197,16 @@ export const router = createBrowserRouter([
         <RequireRole role="owner">
           <Trazabilidad />
         </RequireRole>
+      </RequireAuth>
+    ),
+  },
+  {
+    path: '/asistente',
+    element: (
+      <RequireAuth>
+        <RequireAnyRole roles={['owner', 'admin']}>
+          <Asistente />
+        </RequireAnyRole>
       </RequireAuth>
     ),
   },

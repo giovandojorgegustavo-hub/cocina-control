@@ -111,6 +111,7 @@ export function Home() {
               <ActionCard title="Precios y descuentos" subtitle="Carta y promociones" to="/precios" />
               <ActionCard title="Extras y opciones" subtitle="Adicionales por grupo" to="/opciones" />
               <ActionCard title="Distritos de reparto" subtitle="Zonas y tarifas" to="/zonas" />
+              <ActionCard title="Asistente" subtitle="Cambios por chat" to="/asistente" />
             </div>
           </section>
         )}
