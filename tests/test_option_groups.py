@@ -298,10 +298,11 @@ async def test_los_combos_se_crean_con_su_descuento(
 
         with engine.connect() as conn:
             rows = combos(conn)
+            # 0023 los siembra al 30 % y 0025 los sube a 35 %: head deja 35.
             assert [(r.name, str(r.sale_price), str(r.discount_percent)) for r in rows] == [
-                ("COMBO DOUBLE", "110.00", "30.00"),
-                ("COMBO OFFICE", "54.00", "30.00"),
-                ("COMBO WRAPPER", "51.00", "30.00"),
+                ("COMBO DOUBLE", "110.00", "35.00"),
+                ("COMBO OFFICE", "54.00", "35.00"),
+                ("COMBO WRAPPER", "51.00", "35.00"),
             ]
             assert all((r.is_sale, r.is_purchase, r.unit) == (True, False, "un") for r in rows)
             author = conn.execute(
@@ -312,7 +313,8 @@ async def test_los_combos_se_crean_con_su_descuento(
             assert author == [seed_owner_id]
 
         # Segundo ciclo: el downgrade deja los combos (son datos); la subida no
-        # los duplica, y les repone el 30 % si alguien lo borro.
+        # los duplica. 0023 les repone el 30 % si alguien lo borro y 0025 lo
+        # lleva a 35 %.
         command.downgrade(cfg, "0022_precios_descuentos")
         with engine.begin() as conn:
             assert len(combos(conn)) == 3
@@ -323,9 +325,9 @@ async def test_los_combos_se_crean_con_su_descuento(
         with engine.connect() as conn:
             rows = combos(conn)
             assert len(rows) == 3
-            assert {r.name: str(r.discount_percent) for r in rows}["COMBO OFFICE"] == "30.00"
+            assert {r.name: str(r.discount_percent) for r in rows}["COMBO OFFICE"] == "35.00"
 
-        # Lo que ve el asistente: precio final con el -30 % y los grupos que
+        # Lo que ve el asistente: precio final con el -35 % y los grupos que
         # carta.json le da al Combo Office, en su orden.
         bot = create_test_user(
             db_session, "asistente_pedidos", f"bot-{uuid.uuid4().hex[:6]}@test.com"
@@ -334,10 +336,10 @@ async def test_los_combos_se_crean_con_su_descuento(
         resp = await client.get(MENU_URL, headers=svc_headers(token, bot.email))
         assert resp.status_code == 200, resp.text
         by_name = {i["name"]: i for i in resp.json()}
-        assert by_name["COMBO OFFICE"]["final_price"] == "37.80"
-        assert by_name["COMBO WRAPPER"]["final_price"] == "35.70"
-        assert by_name["COMBO DOUBLE"]["final_price"] == "77.00"
-        assert by_name["COMBO OFFICE"]["discount_percent"] == "30.00"
+        assert by_name["COMBO OFFICE"]["final_price"] == "35.10"
+        assert by_name["COMBO WRAPPER"]["final_price"] == "33.15"
+        assert by_name["COMBO DOUBLE"]["final_price"] == "71.50"
+        assert by_name["COMBO OFFICE"]["discount_percent"] == "35.00"
         # 0024 apendea al Combo Office los grupos para elegir bowl y bebida y el
         # de cubiertos, despues de los tres que 0023 ya le habia dado.
         assert [g["name"] for g in by_name["COMBO OFFICE"]["option_groups"]] == [

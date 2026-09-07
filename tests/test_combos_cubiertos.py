@@ -115,10 +115,11 @@ async def test_el_combo_office_ofrece_bowl_bebida_y_cubiertos(
     bowl = next(g for g in item["option_groups"] if g["name"] == "Elige tu bowl")
     assert bowl["required"] is True
     assert (bowl["selection"], bowl["min_choices"], bowl["max_choices"]) == ("single", 1, 1)
-    # Los bowls ya armados, a 0.00: el combo ya los cubre.
+    # Los bowls ya armados, a 0.00: el combo ya los cubre. 0025 sumo el Crispy.
     assert {o["name"]: o["price"] for o in bowl["options"]} == {
         "Focus Bowl": "0.00",
         "Energy Bowl": "0.00",
+        "Crispy Salad": "0.00",
     }
 
     bebida = next(g for g in item["option_groups"] if g["name"] == "Bebida")
@@ -376,6 +377,28 @@ async def test_la_migracion_asigna_cubiertos_y_enlaza_los_bowls(postgres_url: st
                 "Segunda bebida",
                 "Cubiertos",
             ]
+
+            # 0025: el descuento de los combos sube de 30 a 35.
+            assert conn.execute(
+                sa.text("SELECT discount_percent FROM products WHERE name = 'COMBO OFFICE'")
+            ).scalar() == Decimal("35.00")
+
+            # 0025: el Crispy Salad se puede elegir como bowl del combo. Aca no
+            # existe el producto Crispy Salad, asi que la opcion queda sin enlace,
+            # pero igual aparece por nombre en los grupos del Office y el Double.
+            for group_name in ("Elige tu bowl", "Primer bowl", "Segundo bowl"):
+                opciones = {
+                    r.name
+                    for r in conn.execute(
+                        sa.text(
+                            "SELECT oi.name FROM option_items oi "
+                            "JOIN option_groups og ON og.id = oi.group_id "
+                            "WHERE og.name = :g"
+                        ),
+                        {"g": group_name},
+                    ).all()
+                }
+                assert "Crispy Salad" in opciones
     finally:
         with engine.begin() as conn:
             # option_items apunta a los bowls con RESTRICT: soltar antes de borrar.
