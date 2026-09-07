@@ -338,10 +338,15 @@ async def test_los_combos_se_crean_con_su_descuento(
         assert by_name["COMBO WRAPPER"]["final_price"] == "35.70"
         assert by_name["COMBO DOUBLE"]["final_price"] == "77.00"
         assert by_name["COMBO OFFICE"]["discount_percent"] == "30.00"
+        # 0024 apendea al Combo Office los grupos para elegir bowl y bebida y el
+        # de cubiertos, despues de los tres que 0023 ya le habia dado.
         assert [g["name"] for g in by_name["COMBO OFFICE"]["option_groups"]] == [
             "Proteína extra",
             "Salsa",
             "Adicionales",
+            "Elige tu bowl",
+            "Bebida",
+            "Cubiertos",
         ]
     finally:
         with engine.begin() as conn:
