@@ -200,8 +200,9 @@ async def test_la_migracion_siembra_los_diez_grupos(client: AsyncClient, owner_t
         "Mini Camote Burger": "15.00",
     }
     extra = by_name["Proteína extra"]
-    assert (extra["selection"], extra["required"], extra["max_choices"]) == (
-        "multiple", True, 2
+    # 0026 la volvio opcional: una proteina EXTRA no puede ser obligatoria.
+    assert (extra["selection"], extra["required"], extra["min_choices"], extra["max_choices"]) == (
+        "multiple", False, 0, 2
     )
     assert [(i["name"], i["price"]) for i in extra["items"]] == [
         ("Sin proteína extra", "0.00"),
