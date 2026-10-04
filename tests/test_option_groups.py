@@ -28,6 +28,10 @@ from .test_sales_orders import MENU_URL, ORDERS_URL, _auth, _make_product, _orde
 from .test_service_principals import create_service_principal, svc_headers
 
 GROUPS_URL = "/api/v1/option-groups"
+
+# 0027 saca los combos de la carta. Lo que 0023-0025 sembraron se comprueba
+# en la ultima revision donde todavia se venden.
+_ULTIMA_CON_COMBOS = "0026_proteina_extra_opcional"
 ITEMS_URL = "/api/v1/option-items"
 
 # Los diez `catalogos` de carta.json, en su orden, con el nombre que les da la
@@ -224,7 +228,8 @@ async def test_arma_tu_bowl_lleva_sus_grupos_en_la_carta(
     bowl = _make_product(db_session, owner_user, f"ARMA TU BOWL {uuid.uuid4().hex[:4]}", "24.90")
     groups = (await client.get(GROUPS_URL, headers=_auth(owner_token))).json()
     by_name = {g["name"]: g for g in groups}
-    wanted = ["Base", "Toppings (hasta 5)", "Proteína", "Proteína extra", "Salsa", "Adicionales"]
+    # 0027 apago "Proteína extra": ya no se ofrece ni se puede asignar.
+    wanted = ["Base", "Toppings (hasta 5)", "Proteína", "Salsa", "Adicionales"]
 
     resp = await client.put(
         _product_groups_url(bowl.id),
@@ -241,7 +246,8 @@ async def test_arma_tu_bowl_lleva_sus_grupos_en_la_carta(
     assert [g["name"] for g in item["option_groups"]] == wanted
     proteina = next(g for g in item["option_groups"] if g["name"] == "Proteína")
     assert proteina["required"] is True and proteina["max_choices"] == 2
-    assert {o["name"]: o["price"] for o in proteina["options"]}["Filete de pollo"] == "8.00"
+    # 0027: la proteina va incluida en el precio del plato, ninguna opcion suma.
+    assert {o["name"]: o["price"] for o in proteina["options"]}["Filete de pollo"] == "0.00"
     # Sin campos de administracion: el bot no necesita saber que esta apagado.
     assert set(proteina["options"][0]) == {"id", "name", "price"}
 
@@ -295,7 +301,7 @@ async def test_los_combos_se_crean_con_su_descuento(
                 ),
                 {"id": seed_owner_id, "email": f"owner-seed-{uuid.uuid4().hex[:6]}@test.com"},
             )
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, _ULTIMA_CON_COMBOS)
 
         with engine.connect() as conn:
             rows = combos(conn)
@@ -322,7 +328,7 @@ async def test_los_combos_se_crean_con_su_descuento(
             conn.execute(
                 sa.text("UPDATE products SET discount_percent = NULL WHERE name = 'COMBO OFFICE'")
             )
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, _ULTIMA_CON_COMBOS)
         with engine.connect() as conn:
             rows = combos(conn)
             assert len(rows) == 3
@@ -360,6 +366,8 @@ async def test_los_combos_se_crean_con_su_descuento(
                 {"names": list(combo_names)},
             )
             conn.execute(sa.text("DELETE FROM users WHERE id = :id"), {"id": seed_owner_id})
+        # El resto de la suite corre contra head.
+        command.upgrade(cfg, "head")
         engine.dispose()
 
 
