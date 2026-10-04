@@ -92,7 +92,8 @@ async def test_la_migracion_aplica_la_carta_nueva_y_se_puede_deshacer(
                     {"id": pid, "name": name, "price": price, "owner": owner_id},
                 )
 
-        command.upgrade(cfg, "head")
+        # Se sube hasta 0027 y no a head: 0029 vuelve a mover estos precios.
+        command.upgrade(cfg, "0027_carta_precios_x2")
         with engine.connect() as conn:
             # Precios al doble del costo, en soles enteros.
             assert precio(conn, "Focus Bowl") == Decimal("24.00")
