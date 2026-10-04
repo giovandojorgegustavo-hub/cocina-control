@@ -1,4 +1,4 @@
-"""Integration test de la migracion 0029: escalera de precios desde S/ 25."""
+"""Integration test de la migracion 0029: escalera de precios de S/ 25 a S/ 28."""
 
 import uuid
 from decimal import Decimal
@@ -23,7 +23,7 @@ async def test_la_migracion_sube_la_escalera_y_se_puede_deshacer(postgres_url: s
     platos = {
         "Wrap Fresh": (uuid.uuid4(), "20.00", "25.00"),
         "Wrap Mediterráneo Verde": (uuid.uuid4(), "21.00", "26.00"),
-        "BBQ Protein Salad": (uuid.uuid4(), "25.00", "30.00"),
+        "BBQ Protein Salad": (uuid.uuid4(), "25.00", "28.00"),
         # Un extra no es un plato: no se toca.
         "Chucrut púrpura 4 oz": (uuid.uuid4(), "8.00", "8.00"),
     }

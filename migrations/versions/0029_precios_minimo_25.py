@@ -2,12 +2,12 @@
 
 Ajuste del dueno (04/10/2026) sobre la carta de 0027. Con el precio en el
 doble exacto del costo el margen quedaba muy justo, y un precio unico para
-todo se veia raro. Se mantiene la escalera por costo, corrida S/ 5 hacia
-arriba: el plato mas barato de producir queda en 25 y el mas caro en 30.
+todo se veia raro. Se mantiene la escalera por costo, entre un piso de 25
+(el plato mas barato de producir) y un techo de 28 (el mas caro):
 
-    Wrap Fresh 25 · Wrap Mediterráneo Verde 26 · Energy Bowl 27 ·
-    Arma tu Wrap 27 · Crispy Salad 28 · Arma tu Salad 29 · Focus Bowl 29 ·
-    Arma tu Bowl 29 · BBQ Protein Salad 30
+    Wrap Fresh 25 · Wrap Mediterráneo Verde 26 · Energy Bowl 26 ·
+    Arma tu Wrap 26 · Crispy Salad 27 · Arma tu Salad 27 · Focus Bowl 27 ·
+    Arma tu Bowl 27 · BBQ Protein Salad 28
 
 Postres, bebidas y extras no cambian.
 
@@ -30,13 +30,13 @@ depends_on: Sequence[str] | None = None
 _PRICES: dict[str, tuple[str, str]] = {
     "WRAP FRESH": ("25.00", "20.00"),
     "WRAP MEDITERRÁNEO VERDE": ("26.00", "21.00"),
-    "ENERGY BOWL": ("27.00", "22.00"),
-    "ARMA TU WRAP": ("27.00", "22.00"),
-    "CRISPY SALAD": ("28.00", "23.00"),
-    "ARMA TU SALAD": ("29.00", "24.00"),
-    "FOCUS BOWL": ("29.00", "24.00"),
-    "ARMA TU BOWL": ("29.00", "24.00"),
-    "BBQ PROTEIN SALAD": ("30.00", "25.00"),
+    "ENERGY BOWL": ("26.00", "22.00"),
+    "ARMA TU WRAP": ("26.00", "22.00"),
+    "CRISPY SALAD": ("27.00", "23.00"),
+    "ARMA TU SALAD": ("27.00", "24.00"),
+    "FOCUS BOWL": ("27.00", "24.00"),
+    "ARMA TU BOWL": ("27.00", "24.00"),
+    "BBQ PROTEIN SALAD": ("28.00", "25.00"),
 }
 
 
