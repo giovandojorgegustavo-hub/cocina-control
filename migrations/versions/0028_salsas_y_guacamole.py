@@ -111,7 +111,8 @@ def upgrade() -> None:
             sa.text(
                 "INSERT INTO option_groups "
                 "(id, name, selection, required, min_choices, max_choices, sort_order, is_active) "
-                "SELECT :id, :name, selection, required, min_choices, max_choices, sort_order, true "
+                "SELECT :id, :name, selection, required, min_choices, max_choices, "
+                "sort_order, true "
                 "FROM option_groups WHERE id = :src"
             ),
             {"id": wrap_group, "name": _WRAP_GROUP, "src": salsa},
