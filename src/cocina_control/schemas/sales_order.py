@@ -176,6 +176,18 @@ class PaymentReject(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class PublicPriceResponse(BaseModel):
+    """Precio de un plato tal como lo ve el cliente en la carta publica.
+
+    Solo nombre y precios: sin ids ni costos. La web empareja por nombre.
+    """
+
+    name: str
+    sale_price: Decimal
+    discount_percent: Decimal
+    final_price: Decimal
+
+
 class MenuItemResponse(BaseModel):
     """Un plato de la carta con su precio de lista y el que se cobra.
 

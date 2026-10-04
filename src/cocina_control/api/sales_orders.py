@@ -63,6 +63,7 @@ from cocina_control.schemas.sales_order import (
     PaymentCreate,
     PaymentReject,
     PaymentResponse,
+    PublicPriceResponse,
     SalesOrderCreate,
     SalesOrderItemOptionIn,
     SalesOrderItemOptionResponse,
@@ -152,6 +153,40 @@ def get_menu(
             discount_percent=_discount_percent(p),
             final_price=_final_price(p),
             option_groups=option_groups.get(p.id, []),
+        )
+        for p in products
+    ]
+
+
+@router.get("/public/prices", response_model=list[PublicPriceResponse])
+def get_public_prices(session: Session = Depends(get_session)) -> list[PublicPriceResponse]:
+    """Precios vigentes de la carta, sin autenticacion.
+
+    Lo consume la carta publica (bonabowl.com/carta) para mostrar el MISMO
+    precio que cobra el asistente. Antes la web tenia sus precios en un archivo
+    aparte y bastaba editar uno solo de los dos lados para que el cliente viera
+    un precio y le cobraran otro.
+
+    Es publico a proposito: son los precios que ya se muestran en la carta. No
+    expone ids, costos ni nada que no este a la vista del cliente. Mismo filtro
+    que /catalog/menu (vendible, activo, con precio mayor a cero).
+    """
+    products = session.scalars(
+        select(Product)
+        .where(
+            Product.is_active.is_(True),
+            Product.is_sale.is_(True),
+            Product.sale_price.is_not(None),
+            Product.sale_price > 0,
+        )
+        .order_by(Product.name)
+    ).all()
+    return [
+        PublicPriceResponse(
+            name=p.name,
+            sale_price=_money(Decimal(p.sale_price)),
+            discount_percent=_discount_percent(p),
+            final_price=_final_price(p),
         )
         for p in products
     ]
