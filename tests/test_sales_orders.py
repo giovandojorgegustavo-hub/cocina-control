@@ -195,16 +195,23 @@ async def test_producto_sin_precio_se_rechaza(
 
 
 @pytest.mark.anyio
-async def test_distrito_sin_cobertura_se_rechaza(
+async def test_distrito_sin_zona_se_registra_sin_estimado_de_envio(
     client: AsyncClient, bot_headers, zona, energy_bowl
 ):
+    """Se reparte a todo distrito: sin zona cargada el envio queda en 0."""
     resp = await client.post(
         ORDERS_URL,
         json=_order_payload(energy_bowl.id, district="Los Olivos"),
         headers=bot_headers,
     )
-    assert resp.status_code == 400
-    assert "coverage" in resp.json()["detail"].lower()
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["district"] == "Los Olivos"
+    assert Decimal(body["delivery_fee"]) == Decimal("0.00")
+    # Lo que se yapea no depende del envio.
+    assert Decimal(body["amount_due"]) == Decimal(body["items_total"]) - Decimal(
+        body["discount_amount"]
+    )
 
 
 # ---------------------------------------------------------------------------

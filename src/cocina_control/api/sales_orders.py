@@ -378,12 +378,13 @@ def create_sales_order(
     session: Session = Depends(get_session),
     actor: User = Depends(_CAN_TAKE_ORDERS),
 ) -> SalesOrderResponse:
+    # Se reparte a cualquier distrito: el envio lo cobra el motorizado al
+    # llegar y la tarifa de la zona es solo un estimado. Un distrito sin zona
+    # cargada NO es motivo para rechazar el pedido (se perdia la venta y el
+    # cliente quedaba esperando a una persona): se registra con envio 0, que
+    # el equipo lee como "sin estimado".
     zone = find_zone(session, payload.address.district)
-    if zone is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"No delivery coverage for district '{payload.address.district}'",
-        )
+    estimated_fee = zone.fee if zone is not None else Decimal("0.00")
 
     customer = _upsert_customer(session, payload.customer, actor)
     address = _resolve_address(session, customer, payload.address, actor)
@@ -401,8 +402,8 @@ def create_sales_order(
         discount_percent=Decimal("0.00"),
         discount_amount=Decimal("0.00"),
         promo_code=promotion.code if promotion else None,
-        delivery_fee=_money(zone.fee),
-        total=_money(zone.fee),
+        delivery_fee=_money(estimated_fee),
+        total=_money(estimated_fee),
         notes=payload.notes,
         conversation_ref=payload.conversation_ref,
         created_by=actor.id,
