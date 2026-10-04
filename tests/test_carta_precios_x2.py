@@ -62,6 +62,11 @@ async def test_la_migracion_aplica_la_carta_nueva_y_se_puede_deshacer(
             ).all()
         }
 
+    def max_proteinas(conn):
+        return conn.execute(
+            sa.text("SELECT max_choices FROM option_groups WHERE name = 'Proteína'")
+        ).scalar()
+
     def grupo_extra_activo(conn):
         return conn.execute(
             sa.text("SELECT is_active FROM option_groups WHERE name = 'Proteína extra'")
@@ -95,6 +100,8 @@ async def test_la_migracion_aplica_la_carta_nueva_y_se_puede_deshacer(
             assert precio(conn, "Arma tu Bowl") == Decimal("24.00")
             # La proteina ya va incluida: ninguna opcion suma.
             assert set(precios_proteina(conn).values()) == {Decimal("0.00")}
+            # ...y por eso se elige una sola: dos gratis serian regalar costo.
+            assert max_proteinas(conn) == 1
             assert grupo_extra_activo(conn) is False
             # Fuera de carta, sin borrarse.
             assert activo(conn, "COMBO OFFICE") is False
@@ -119,6 +126,7 @@ async def test_la_migracion_aplica_la_carta_nueva_y_se_puede_deshacer(
             proteinas = precios_proteina(conn)
             assert proteinas["Sin proteína"] == Decimal("0.00")
             assert proteinas["Tilapia"] == Decimal("8.00")
+            assert max_proteinas(conn) == 2
             assert grupo_extra_activo(conn) is True
             assert activo(conn, "COMBO OFFICE") is True
             assert activo(conn, _POSTRES[0]) is False

@@ -12,7 +12,8 @@ Decision del dueno (04/10/2026), como ultima estrategia para que entre gente:
 2. PROTEÍNA INCLUIDA. En los "Arma tu ..." la proteina se cobraba aparte
    (+S/ 8) y el cliente descubria el precio real recien al final. Ahora el
    precio del plato ya la incluye: todas las opciones del grupo "Proteína"
-   quedan en S/ 0.
+   quedan en S/ 0. Y como ahora es gratis, se elige UNA sola (antes hasta 2,
+   cuando cada una se cobraba): si no, dos proteinas saldrian sin costo.
 
 3. SIN "PROTEÍNA EXTRA". El grupo confundia (se leia como obligatorio y como
    un segundo cobro). Se desactiva el grupo entero; los enlaces con los platos
@@ -110,6 +111,11 @@ def upgrade() -> None:
         {"g": _PROTEIN_GROUP},
     )
 
+    bind.execute(
+        sa.text("UPDATE option_groups SET max_choices = 1 WHERE name = :g"),
+        {"g": _PROTEIN_GROUP},
+    )
+
     # 3. Sin "Proteína extra".
     bind.execute(
         sa.text("UPDATE option_groups SET is_active = false WHERE name = :g"),
@@ -180,6 +186,11 @@ def downgrade() -> None:
             "AND group_id IN (SELECT id FROM option_groups WHERE name = :g)"
         ),
         {"price": _PROTEIN_OLD_PRICE, "free": _PROTEIN_FREE_ITEM, "g": _PROTEIN_GROUP},
+    )
+
+    bind.execute(
+        sa.text("UPDATE option_groups SET max_choices = 2 WHERE name = :g"),
+        {"g": _PROTEIN_GROUP},
     )
 
     bind.execute(

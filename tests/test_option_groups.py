@@ -245,7 +245,8 @@ async def test_arma_tu_bowl_lleva_sus_grupos_en_la_carta(
     item = next(i for i in resp.json() if i["id"] == str(bowl.id))
     assert [g["name"] for g in item["option_groups"]] == wanted
     proteina = next(g for g in item["option_groups"] if g["name"] == "Proteína")
-    assert proteina["required"] is True and proteina["max_choices"] == 2
+    # 0027: una sola proteina, incluida en el precio.
+    assert proteina["required"] is True and proteina["max_choices"] == 1
     # 0027: la proteina va incluida en el precio del plato, ninguna opcion suma.
     assert {o["name"]: o["price"] for o in proteina["options"]}["Filete de pollo"] == "0.00"
     # Sin campos de administracion: el bot no necesita saber que esta apagado.
