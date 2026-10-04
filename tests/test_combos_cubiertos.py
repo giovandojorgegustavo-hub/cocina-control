@@ -283,7 +283,15 @@ async def test_la_migracion_asigna_cubiertos_y_enlaza_los_bowls(postgres_url: st
     energy_id = uuid.uuid4()
     bebida_id = uuid.uuid4()
     my_products = (focus_id, energy_id, bebida_id)
-    combo_names = ("COMBO OFFICE", "COMBO WRAPPER", "COMBO DOUBLE")
+    # 0027 crea ademas los postres atribuidos al owner: se limpian con los combos,
+    # o el DELETE del owner choca con products.created_by (RESTRICT).
+    combo_names = (
+        "COMBO OFFICE",
+        "COMBO WRAPPER",
+        "COMBO DOUBLE",
+        "Chocobrownie Frutos Rojos",
+        "Pack 3 Chocobrownies Frutos Rojos",
+    )
 
     insert_product = sa.text(
         "INSERT INTO products (id, name, unit, is_active, is_purchase, is_sale, "
