@@ -37,8 +37,13 @@ async def test_la_migracion_cobra_la_diferencia_y_se_puede_deshacer(postgres_url
                 "Filete de pollo": Decimal("0.00"),
                 "Filete de pollo en salsa BBQ ahumada": Decimal("1.00"),
                 "Milanesa": Decimal("2.00"),
-                "Tilapia": Decimal("3.00"),
+                # 0031 la bajo de 3.00 a 2.50.
+                "Tilapia": Decimal("2.50"),
             }
+
+        command.downgrade(cfg, "0030_proteinas_con_diferencia")
+        with engine.connect() as conn:
+            assert precios(conn)["Tilapia"] == Decimal("3.00")
 
         command.downgrade(cfg, "0029_precios_minimo_25")
         with engine.connect() as conn:
