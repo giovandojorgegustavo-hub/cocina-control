@@ -28,6 +28,7 @@ from .conftest import create_test_user
 from .test_service_principals import create_service_principal, svc_headers
 
 MENU_URL = "/api/v1/catalog/menu"
+PUBLIC_PRICES_URL = "/api/v1/public/prices"
 ZONES_URL = "/api/v1/delivery-zones"
 ORDERS_URL = "/api/v1/sales-orders"
 
@@ -514,3 +515,31 @@ async def test_la_opcion_legada_sigue_igual_junto_a_la_nueva(
     (option,) = resp.json()["items"][0]["options"]
     assert option["option_item_id"] is None
     assert option["price_delta"] == "7.00"
+
+
+# ---------------------------------------------------------------------------
+# Precios publicos (los lee la carta web)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_precios_publicos_no_piden_autenticacion(client: AsyncClient, energy_bowl):
+    resp = await client.get(PUBLIC_PRICES_URL)
+    assert resp.status_code == 200
+    fila = next(r for r in resp.json() if r["name"] == energy_bowl.name)
+    assert Decimal(fila["sale_price"]) == Decimal("33.00")
+    assert Decimal(fila["final_price"]) == Decimal("33.00")
+    # Solo lo que ya esta a la vista del cliente: ni ids ni costos.
+    assert set(fila) == {"name", "sale_price", "discount_percent", "final_price"}
+
+
+@pytest.mark.anyio
+async def test_precios_publicos_reflejan_el_descuento_del_producto(
+    client: AsyncClient, db_session: Session, energy_bowl
+):
+    energy_bowl.discount_percent = Decimal("35.00")
+    db_session.flush()
+    resp = await client.get(PUBLIC_PRICES_URL)
+    fila = next(r for r in resp.json() if r["name"] == energy_bowl.name)
+    assert Decimal(fila["discount_percent"]) == Decimal("35.00")
+    assert Decimal(fila["final_price"]) == Decimal("21.45")
