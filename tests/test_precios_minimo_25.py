@@ -53,7 +53,8 @@ async def test_la_migracion_sube_la_escalera_y_se_puede_deshacer(postgres_url: s
                     {"id": pid, "name": name, "price": antes, "owner": owner_id},
                 )
 
-        command.upgrade(cfg, "head")
+        # Hasta 0029 y no a head: 0033 vuelve a mover los platos listos.
+        command.upgrade(cfg, "0029_precios_minimo_25")
         with engine.connect() as conn:
             for name, (_, _, despues) in platos.items():
                 assert precio(conn, name) == Decimal(despues), name
