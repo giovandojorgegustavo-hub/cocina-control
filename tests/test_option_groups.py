@@ -187,8 +187,9 @@ async def test_la_migracion_siembra_los_diez_grupos(client: AsyncClient, owner_t
 
     by_name = {g["name"]: g for g in seeded}
     base = by_name["Base"]
+    # 0032: en el Arma tu Bowl se eligen entre 1 y 2 bases.
     assert (base["selection"], base["required"], base["min_choices"], base["max_choices"]) == (
-        "single", True, 1, 1
+        "multiple", True, 1, 2
     )
     bases = by_name["Bases (elige 2)"]
     assert (bases["selection"], bases["min_choices"], bases["max_choices"]) == ("multiple", 2, 2)
@@ -215,7 +216,8 @@ async def test_la_migracion_siembra_los_diez_grupos(client: AsyncClient, owner_t
         ("Filete de pollo", "7.00"),
         ("Filete de pollo en salsa BBQ ahumada", "8.00"),
     ]
-    assert len(by_name["Toppings (hasta 5)"]["items"]) == 11
+    # 11 sembrados por 0023 + 4 que agrego 0032 (los apagados siguen en la lista).
+    assert len(by_name["Toppings (hasta 5)"]["items"]) == 15
     assert by_name["Toppings (hasta 6)"]["max_choices"] == 6
 
 
