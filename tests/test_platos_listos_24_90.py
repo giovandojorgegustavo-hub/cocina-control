@@ -1,4 +1,4 @@
-"""Integration test de la migracion 0029: escalera de precios de S/ 25 a S/ 28."""
+"""Integration test de la migracion 0033: platos listos a S/ 24.90, Arma tu intactos."""
 
 import uuid
 from decimal import Decimal
@@ -8,7 +8,9 @@ import sqlalchemy as sa
 
 
 @pytest.mark.anyio
-async def test_la_migracion_sube_la_escalera_y_se_puede_deshacer(postgres_url: str, db_engine):
+async def test_la_migracion_unifica_los_platos_listos_y_se_puede_deshacer(
+    postgres_url: str, db_engine
+):
     from alembic import command
     from alembic.config import Config
 
@@ -21,11 +23,9 @@ async def test_la_migracion_sube_la_escalera_y_se_puede_deshacer(postgres_url: s
 
     owner_id = uuid.uuid4()
     platos = {
-        "Wrap Fresh": (uuid.uuid4(), "20.00", "25.00"),
-        "Wrap Mediterráneo Verde": (uuid.uuid4(), "21.00", "26.00"),
-        "BBQ Protein Salad": (uuid.uuid4(), "25.00", "28.00"),
-        # Un extra no es un plato: no se toca.
-        "Chucrut púrpura 4 oz": (uuid.uuid4(), "8.00", "8.00"),
+        "Focus Bowl": (uuid.uuid4(), "27.00", "24.90"),
+        "Wrap Fresh": (uuid.uuid4(), "25.00", "24.90"),
+        "Arma tu Bowl": (uuid.uuid4(), "27.00", "27.00"),
     }
 
     def precio(conn, name):
@@ -34,14 +34,14 @@ async def test_la_migracion_sube_la_escalera_y_se_puede_deshacer(postgres_url: s
         ).scalar()
 
     try:
-        command.downgrade(cfg, "0028_salsas_y_guacamole")
+        command.downgrade(cfg, "0032_toppings_y_bases")
         with engine.begin() as conn:
             conn.execute(
                 sa.text(
                     "INSERT INTO users (id, name, email, password_hash, role) "
                     "VALUES (:id, 'Dueño', :email, 'x', 'owner')"
                 ),
-                {"id": owner_id, "email": f"owner-0029-{uuid.uuid4().hex[:6]}@test.com"},
+                {"id": owner_id, "email": f"owner-0033-{uuid.uuid4().hex[:6]}@test.com"},
             )
             for name, (pid, antes, _) in platos.items():
                 conn.execute(
@@ -53,13 +53,12 @@ async def test_la_migracion_sube_la_escalera_y_se_puede_deshacer(postgres_url: s
                     {"id": pid, "name": name, "price": antes, "owner": owner_id},
                 )
 
-        # Hasta 0029 y no a head: 0033 vuelve a mover los platos listos.
-        command.upgrade(cfg, "0029_precios_minimo_25")
+        command.upgrade(cfg, "head")
         with engine.connect() as conn:
             for name, (_, _, despues) in platos.items():
                 assert precio(conn, name) == Decimal(despues), name
 
-        command.downgrade(cfg, "0028_salsas_y_guacamole")
+        command.downgrade(cfg, "0032_toppings_y_bases")
         with engine.connect() as conn:
             for name, (_, antes, _) in platos.items():
                 assert precio(conn, name) == Decimal(antes), name
