@@ -53,7 +53,8 @@ async def test_la_migracion_unifica_los_platos_listos_y_se_puede_deshacer(
                     {"id": pid, "name": name, "price": antes, "owner": owner_id},
                 )
 
-        command.upgrade(cfg, "head")
+        # Hasta 0033 y no a head: 0035 vuelve a mover un plato listo.
+        command.upgrade(cfg, "0033_platos_listos_24_90")
         with engine.connect() as conn:
             for name, (_, _, despues) in platos.items():
                 assert precio(conn, name) == Decimal(despues), name
